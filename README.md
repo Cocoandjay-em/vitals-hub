@@ -84,6 +84,12 @@ All under `/api` (JSON):
 | `POST /api/explain-marker` | single-value meaning: `{name, value, unit, refLow, refHigh, flag, category?}` → `{explanation}` (2–3 sentences) |
 | `POST /api/analysis` | general panel assessment: `{date?, markers:[{name, value, unit, refLow, refHigh, flag, category}]}` → `{analysis}` (paragraph + `- ` bullets) |
 | `POST /api/import/apple-health` | Apple Health records: `{records:[{type, date, value, unit}]}` → `{imported, days, skipped}` |
+| `GET /api/reports` | all clinical reports, newest visit first |
+| `POST /api/reports/analyze` | vision pass over a clinical report: `{pages:[…]}` → proposed `{date, title, specialty, region, stage, stageRationale, summary, findings, followUp}` (saves nothing) |
+| `POST /api/reports` | store a confirmed report (optional `fileBase64` + `mime` keeps the original document) |
+| `PATCH /api/reports/:id` | user override of `stage` / `region` / `date` / `title`; a stage change marks the record `stageSource: "user"` |
+| `GET /api/reports/:id/file` | download the stored original document |
+| `DELETE /api/reports/:id` | delete a report and its stored file |
 
 Storage: `better-sqlite3` at `server/data/biomarkers.db` (WAL mode, foreign keys,
 `tests` 1—N `biomarkers`, `settings` key/value). Legacy `localStorage` history is
@@ -132,6 +138,29 @@ detected on first load with an import/discard banner.
   zooms back out; clicking a different organ animates straight to it. On mobile
   the card docks below the hologram. `prefers-reduced-motion` makes the zoom an
   instant jump.
+- **Clinical reports** — a specialist visit (neurology, cardiology, radiology…)
+  carries no biomarker rows, so it has its own intake path: **CLINICAL REPORT**
+  in the Intake panel or the bottom bar. The pages are rasterised exactly like a
+  lab report and sent to `POST /api/reports/analyze`, which asks the vision model
+  for the **visit date**, the **organ region**, a **criticality stage**
+  (normal / mild / moderate / severe / critical / unstaged) and a one-sentence
+  **rationale quoted from the document**, plus a lay summary, the report's own
+  findings and any follow-up. The prompt forbids inventing findings or making a
+  diagnosis: the stage may only reflect the severity the report itself
+  documents, and ties break toward the *less* severe option.
+  Nothing is stored until you confirm — the review card keeps the title, date,
+  region and stage editable, and changing the stage records it as
+  `stageSource: "user"` so an AI proposal is never mistaken for your decision.
+  Confirmed reports attach to their organ on the body map: the region lights up
+  in the stage colour (emerald → lime → amber → rose → red), its chip shows the
+  stage, and the organ card lists each report with its summary, findings,
+  follow-up, the staging rationale, a stage dropdown for later overrides, a link
+  to the original document and a delete button. An organ's colour is the **worse**
+  of its biomarker flags and its report staging, so a clean panel never hides a
+  severe report. The **brain** is a report-only region — no blood panel maps to
+  it — which is what makes a neurology report land in the right place.
+  Original documents (PDF/JPG/PNG/WebP, ≤25 MB) are stored under
+  `server/data/reports/` with server-generated filenames.
 - **Per-marker AI meaning** — every row in the results table has an ⓘ button
   that expands an inline mini-card with a 2–3 sentence explanation from
   `POST /api/explain-marker`: what the marker measures and what *this* value
