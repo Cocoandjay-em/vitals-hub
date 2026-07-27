@@ -3,7 +3,15 @@ import * as THREE from 'three'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Html, useGLTF } from '@react-three/drei'
 import type { BiomarkerReading } from '@/types/biomarker'
-import { buildRegions, FLAG_COLOR, type RegionId, type RegionState } from '@/components/BodyMap'
+import type { ClinicalReport } from '@/types/report'
+import {
+  buildRegions,
+  FLAG_COLOR,
+  regionColor,
+  regionHasData,
+  type RegionId,
+  type RegionState,
+} from '@/components/BodyMap'
 import { OrganInfo } from '@/components/OrganInfo'
 import { cn } from '@/lib/utils'
 
@@ -47,7 +55,8 @@ const BODY_HEIGHT = 1.81
 
 /** Organ scenes grouped by body-map region (thyroid glow sprite handled separately). */
 const REGION_MODELS: Partial<Record<RegionId, ModelKey[]>> = {
-  neck: ['brain'], // head & hormones — the atlas has no thyroid mesh, brain carries the region
+  brain: ['brain'], // nervous system — driven by clinical reports, not blood panels
+  neck: [], // thyroid: no mesh in the atlas, rendered as a glow sprite instead
   heart: ['heart'],
   liver: ['liver'],
   kidney: ['kidneyL', 'kidneyR'],
@@ -175,8 +184,8 @@ function buildAnatomy(scenes: Record<ModelKey, THREE.Group>, regions: RegionStat
   /* ------------- organs: glass volume + soft rim, flag colours ------------- */
   for (const [regionId, keys] of Object.entries(REGION_MODELS) as [RegionId, ModelKey[]][]) {
     const region = regionById.get(regionId)
-    const noData = !region || region.markers.length === 0 || dimmed
-    const color = region ? FLAG_COLOR[region.worst] : FLAG_COLOR.unknown
+    const noData = !region || !regionHasData(region) || dimmed
+    const color = region ? regionColor(region) : FLAG_COLOR.unknown
     const intensity = region?.intensity ?? 0
     for (const key of keys) {
       // translucent volumes: overlapping organs (the gut fills the whole
@@ -217,6 +226,7 @@ function buildAnatomy(scenes: Record<ModelKey, THREE.Group>, regions: RegionStat
     return b.getCenter(new THREE.Vector3())
   }
   const anchors = {} as Record<RegionId, [number, number, number]>
+  anchors.brain = tx(centerOf(['brain']))
   anchors.neck = [0, 1.53, 0.13] // thyroid — no organ mesh in the atlas set
   anchors.heart = tx(centerOf(['heart']))
   anchors.lungs = tx(centerOf(['lung']))
@@ -328,8 +338,8 @@ function Hotspot({
   hidden: boolean
   onClick: () => void
 }) {
-  const noData = region.markers.length === 0
-  const color = FLAG_COLOR[region.worst]
+  const noData = !regionHasData(region)
+  const color = regionColor(region)
   const spriteOnly = region.def.id === 'neck' // organs glow via their real meshes
   return (
     <group position={position}>
@@ -545,15 +555,29 @@ export interface BodyScan3DProps {
   onSelectMarker: (name: string) => void
   /** body model from the user profile — defaults to the male Visible Human */
   sex?: BodySex
+  /** clinical reports, distributed across the organ regions they belong to */
+  reports?: ClinicalReport[]
+  onDeleteReport?: (id: string) => void
+  onRestageReport?: (id: string, stage: string) => void
 }
 
-export function BodyScan3D({ markers, date, selected, onSelectMarker, sex = 'male' }: BodyScan3DProps) {
-  const regions = useMemo(() => (markers ? buildRegions(markers) : []), [markers])
+export function BodyScan3D({
+  markers,
+  date,
+  selected,
+  onSelectMarker,
+  sex = 'male',
+  reports,
+  onDeleteReport,
+  onRestageReport,
+}: BodyScan3DProps) {
+  const regions = useMemo(() => buildRegions(markers ?? [], reports ?? []), [markers, reports])
   const [activeId, setActiveId] = useState<RegionId | null>(null)
   // anchors live in STATE (not a ref): they are published by LoadedBody after
   // the anatomy build, so the camera-focus target re-renders with real values
   const [anchors, setAnchors] = useState<Record<RegionId, [number, number, number]> | null>(null)
-  const empty = !markers || markers.length === 0
+  // a report with no blood panel is still data — the body must not stay dimmed
+  const empty = (!markers || markers.length === 0) && (reports?.length ?? 0) === 0
 
   const reducedMotion = useMemo(
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -624,6 +648,8 @@ export function BodyScan3D({ markers, date, selected, onSelectMarker, sex = 'mal
             date={date}
             onClose={() => setActiveId(null)}
             onSelectMarker={onSelectMarker}
+            onDeleteReport={onDeleteReport}
+            onRestageReport={onRestageReport}
           />
         </div>
       )}

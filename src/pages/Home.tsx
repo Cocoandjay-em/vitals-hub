@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Database, Download, Eraser, FileUp, HeartPulse, Loader2, PenLine, Scale, Settings, Sparkles, Table2, Thermometer, TriangleAlert, Upload, X } from 'lucide-react'
+import { Activity, Database, Download, Eraser, FileText, FileUp, HeartPulse, Loader2, PenLine, Scale, Settings, Sparkles, Table2, Thermometer, TriangleAlert, Upload, X } from 'lucide-react'
 import type { BiomarkerReading, ExtractionResult, TestRecord } from '@/types/biomarker'
-import { extractFromFile } from '@/lib/extract'
+import type { ClinicalReport } from '@/types/report'
+import { extractFromFile, rasteriseForAI } from '@/lib/extract'
 import { clearLegacyHistory, exportHistory, loadLegacyHistory, parseImport } from '@/lib/storage'
 import { APPLE_HEALTH_ACCEPT, APPLE_HEALTH_TOOLTIP, parseAppleHealthExport } from '@/lib/appleHealth'
 import * as api from '@/lib/api'
@@ -12,6 +13,7 @@ import { FLAG_COLOR } from '@/components/BodyMap'
 import { BodyScan3D, type BodySex } from '@/components/BodyScan3D'
 import { UploadZone } from '@/components/UploadZone'
 import { ExtractionReview } from '@/components/ExtractionReview'
+import { ReportReview, type ReportDraft } from '@/components/ReportReview'
 import { ResultsTable } from '@/components/ResultsTable'
 import { HistoryList } from '@/components/HistoryList'
 import { ManualEntryForm } from '@/components/ManualEntryForm'
@@ -24,6 +26,8 @@ export default function Home() {
   const [history, setHistory] = useState<TestRecord[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
   const [extractions, setExtractions] = useState<ExtractionResult[]>([])
+  const [reports, setReports] = useState<ClinicalReport[]>([])
+  const [reportDrafts, setReportDrafts] = useState<ReportDraft[]>([])
   const [processing, setProcessing] = useState(false)
   const [status, setStatus] = useState('')
   const [notice, setNotice] = useState('')
@@ -39,6 +43,7 @@ export default function Home() {
   const [bodySex, setBodySex] = useState<BodySex>('male') // profile drives the body model; owner is male
   const importRef = useRef<HTMLInputElement>(null)
   const ahRef = useRef<HTMLInputElement>(null)
+  const reportRef = useRef<HTMLInputElement>(null)
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -49,8 +54,17 @@ export default function Home() {
     }
   }, [])
 
+  const refreshReports = useCallback(async () => {
+    try {
+      setReports(await api.getReports())
+    } catch {
+      /* reports are optional — a failure here must not blank the dashboard */
+    }
+  }, [])
+
   useEffect(() => {
     void refreshHistory()
+    void refreshReports()
     api.getConfig().then((cfg) => setAiEnabled(cfg.hasKey)).catch(() => undefined)
     api.getProfile().then((p) => setBodySex(p.sex)).catch(() => undefined)
     // Old browser-only storage is obsolete — wipe it silently; reports get re-uploaded.
@@ -60,7 +74,7 @@ export default function Home() {
       setNotice('Old browser-only data wiped — re-upload your reports')
       window.setTimeout(() => setNotice(''), 6000)
     }
-  }, [refreshHistory])
+  }, [refreshHistory, refreshReports])
 
   const flashNotice = useCallback((msg: string) => {
     setNotice(msg)
@@ -187,6 +201,128 @@ export default function Home() {
   const handleDiscard = useCallback((index: number) => {
     setExtractions((prev) => prev.filter((_, i) => i !== index))
   }, [])
+
+  /* ------------------------- clinical reports ------------------------- */
+
+  /** Read a file as base64 so the original document can be stored server-side. */
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+      reader.onerror = () => reject(new Error('Could not read the file'))
+      reader.readAsDataURL(file)
+    })
+
+  /** Specialist visit reports: AI proposes date, organ and stage; user confirms. */
+  const handleReportFiles = useCallback(
+    async (files: File[]) => {
+      setProcessing(true)
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        setStatus(`Reading report ${i + 1}/${files.length}: ${file.name}`)
+        try {
+          const pages = await rasteriseForAI(file, setStatus)
+          setStatus(`AI: staging ${file.name}…`)
+          const analysis = await api.analyzeReport(pages)
+          const draft: ReportDraft = { ...analysis, fileName: file.name }
+          // keep the original document only when the backend can store its type
+          if (['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+            draft.fileBase64 = await fileToBase64(file)
+            draft.mime = file.type
+          }
+          setReportDrafts((prev) => [...prev, draft])
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          setReportDrafts((prev) => [
+            ...prev,
+            {
+              fileName: file.name,
+              date: null,
+              title: file.name,
+              specialty: '',
+              region: 'systemic',
+              stage: 'unknown',
+              stageRationale: '',
+              summary: '',
+              findings: [],
+              followUp: '',
+              error:
+                err instanceof api.ApiError && err.code === 'NO_API_KEY'
+                  ? 'Clinical reports need an AI key — add one under AI KEY. Offline staging is not possible.'
+                  : `Could not read this report: ${message}`,
+            },
+          ])
+        }
+      }
+      setStatus('')
+      setProcessing(false)
+    },
+    [],
+  )
+
+  const handleConfirmReport = useCallback(
+    async (index: number, edited: ReportDraft) => {
+      try {
+        await api.saveReport({
+          date: edited.date ?? new Date().toISOString().slice(0, 10),
+          title: edited.title,
+          specialty: edited.specialty,
+          region: edited.region,
+          stage: edited.stage,
+          // a stage the user changed away from the AI proposal is their own call
+          stageSource: edited.stage === reportDrafts[index]?.stage ? 'ai' : 'user',
+          stageRationale: edited.stageRationale,
+          summary: edited.summary,
+          findings: edited.findings,
+          followUp: edited.followUp,
+          fileName: edited.fileName,
+          fileBase64: edited.fileBase64,
+          mime: edited.mime,
+        })
+      } catch (err) {
+        flashNotice(`⚠ Save failed: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      await refreshReports()
+      setReportDrafts((prev) => prev.filter((_, i) => i !== index))
+      flashNotice(`✓ Report attached to ${edited.region.toUpperCase()} (${edited.date})`)
+    },
+    [reportDrafts, refreshReports, flashNotice],
+  )
+
+  const handleDiscardReport = useCallback((index: number) => {
+    setReportDrafts((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const handleDeleteReport = useCallback(
+    async (id: string) => {
+      const report = reports.find((r) => r.id === id)
+      if (!window.confirm(`Delete the report "${report?.title ?? id}"? The stored document is removed too.`)) return
+      try {
+        await api.deleteReport(id)
+      } catch (err) {
+        flashNotice(`⚠ Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      await refreshReports()
+    },
+    [reports, refreshReports, flashNotice],
+  )
+
+  /** User override of a stage the AI assigned. */
+  const handleRestageReport = useCallback(
+    async (id: string, stage: string) => {
+      try {
+        await api.patchReport(id, { stage })
+      } catch (err) {
+        flashNotice(`⚠ Could not update the stage: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      await refreshReports()
+      flashNotice(`✓ Stage set to ${stage.toUpperCase()}`)
+    },
+    [refreshReports, flashNotice],
+  )
 
   /** Manual entry: save one or more measurements into the test record for their date. */
   const handleSaveManual = useCallback(
@@ -373,6 +509,9 @@ export default function Home() {
               selected={selectedMarker}
               onSelectMarker={handleSelectMarker}
               sex={bodySex}
+              reports={reports}
+              onDeleteReport={handleDeleteReport}
+              onRestageReport={handleRestageReport}
             />
           </div>
         </div>
@@ -430,7 +569,8 @@ export default function Home() {
           </p>
         )}
         <div className="mx-auto flex w-full max-w-[1700px] flex-wrap items-center justify-center gap-2">
-          <HudButton onClick={() => setShowIntake(true)} icon={<FileUp className="h-3 w-3" />} label="SCAN REPORT" title="Upload lab reports (PDF / JPG / PNG)" />
+          <HudButton onClick={() => setShowIntake(true)} icon={<FileUp className="h-3 w-3" />} label="SCAN LAB" title="Upload lab reports with biomarker values (PDF / JPG / PNG)" />
+          <HudButton onClick={() => reportRef.current?.click()} icon={<FileText className="h-3 w-3" />} label="CLINICAL REPORT" title="Upload a specialist visit report (neurology, cardiology…) — the AI stages it and attaches it to the right organ" disabled={processing} />
           <HudButton onClick={() => { setShowManual(true); setShowIntake(true) }} icon={<PenLine className="h-3 w-3" />} label="MANUAL +" title="Add a measurement manually (weight, blood pressure…)" />
           <HudButton onClick={() => ahRef.current?.click()} icon={<HeartPulse className="h-3 w-3" />} label="APPLE HEALTH" title={APPLE_HEALTH_TOOLTIP} disabled={processing} />
           <HudButton onClick={() => setShowResults(true)} icon={<Table2 className="h-3 w-3" />} label="RESULTS" title="Full results table + history" />
@@ -439,7 +579,7 @@ export default function Home() {
           <HudButton onClick={() => setShowSettings(true)} icon={<Settings className="h-3 w-3" />} label="AI KEY" title="AI extraction settings (API key, endpoint, model)" />
         </div>
         <p className="hud-mono mt-2 text-center text-[8px] tracking-[0.2em] text-cyan-100/25">
-          VITALS HUD · DATA STORED LOCALLY IN SQLITE · NOT A MEDICAL DEVICE
+          VITALS HUB · DATA STORED LOCALLY IN SQLITE · NOT A MEDICAL DEVICE
         </p>
       </div>
 
@@ -452,6 +592,23 @@ export default function Home() {
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (f) void handleAppleHealth(f)
+          e.target.value = ''
+        }}
+      />
+
+      {/* hidden clinical-report file input — opens the intake modal on pick */}
+      <input
+        ref={reportRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? [])
+          if (files.length > 0) {
+            setShowIntake(true)
+            void handleReportFiles(files)
+          }
           e.target.value = ''
         }}
       />
@@ -476,10 +633,15 @@ export default function Home() {
             </div>
             <div className="flex flex-col gap-4">
               <UploadZone disabled={processing} onFiles={handleFiles} />
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <HudButton onClick={() => setShowManual((v) => !v)} icon={<PenLine className="h-3 w-3" />} label="MANUAL +" title="Add a measurement manually" />
                 <HudButton onClick={() => ahRef.current?.click()} icon={<HeartPulse className="h-3 w-3" />} label="APPLE HEALTH" title={APPLE_HEALTH_TOOLTIP} disabled={processing} />
+                <HudButton onClick={() => reportRef.current?.click()} icon={<FileText className="h-3 w-3" />} label="CLINICAL REPORT" title="A specialist visit report with no lab values — staged by AI and attached to an organ" disabled={processing} />
               </div>
+              <p className="hud-mono text-[9px] leading-relaxed tracking-wider text-cyan-100/35">
+                LAB REPORT → biomarker values and trends · CLINICAL REPORT → a specialist
+                visit (neurology, cardiology…) attached to an organ with a criticality stage
+              </p>
               {showManual && (
                 <ManualEntryForm onSave={handleSaveManual} onClose={() => setShowManual(false)} />
               )}
@@ -490,6 +652,19 @@ export default function Home() {
               )}
               {notice && (
                 <p className="hud-mono text-[11px] tracking-wider text-emerald-300">{notice}</p>
+              )}
+              {reportDrafts.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="hud-mono text-[10px] tracking-[0.16em] text-cyan-50">
+                    CLINICAL REPORTS // CHECK THE AI STAGING
+                  </p>
+                  <ReportReview
+                    drafts={reportDrafts}
+                    onConfirm={handleConfirmReport}
+                    onDiscard={handleDiscardReport}
+                    busy={processing}
+                  />
+                </div>
               )}
               {extractions.length > 0 && (
                 <ExtractionReview results={extractions} onConfirm={handleConfirm} onDiscard={handleDiscard} />

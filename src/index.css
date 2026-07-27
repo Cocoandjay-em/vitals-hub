@@ -73,7 +73,7 @@
     @apply bg-background text-foreground;
   }
 }
-/* ================= VITALS HUD — futuristic medical theme ================= */
+/* ================= VITALS HUB — futuristic medical theme ================= */
 
 :root {
   --hud-cyan: #22d3ee;

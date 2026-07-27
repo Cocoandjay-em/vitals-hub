@@ -126,7 +126,8 @@ async function renderPageToJpeg(page: pdfjsLib.PDFPageProxy, scale: number): Pro
   return canvas.toDataURL('image/jpeg', 0.85).split(',')[1] ?? ''
 }
 
-async function rasteriseForAI(file: File, onProgress: ProgressFn): Promise<PageImage[]> {
+/** Render a file's pages to JPEG for a vision call (shared with report intake). */
+export async function rasteriseForAI(file: File, onProgress: ProgressFn): Promise<PageImage[]> {
   const ext = file.name.toLowerCase().split('.').pop() ?? ''
   const isPdf = file.type === 'application/pdf' || ext === 'pdf'
   if (isPdf) {

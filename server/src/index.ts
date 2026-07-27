@@ -1,5 +1,5 @@
 /**
- * Vitals HUD — backend entrypoint.
+ * Vitals Hub — backend entrypoint.
  *
  * Single-process Express server:
  *   /api/*            REST API (history, markers, settings, AI extraction)
@@ -15,18 +15,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .env lives in server/ regardless of where the process was started from
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import express from 'express';
 import {
   clearHistory,
   deleteMarker,
+  deleteReport,
   deleteTest,
   getHistory,
+  getReportFile,
+  getReports,
   getSetting,
+  insertReport,
   setSetting,
+  updateReport,
   upsertTest,
 } from './db.js';
 import {
   analyzePanel,
+  analyzeReport,
   explainMarker,
   explainRegion,
   extractWithAI,
@@ -357,6 +364,167 @@ app.post('/api/import/apple-health', (req, res) => {
   res.json({ imported, days: byDate.size, skipped });
 });
 
+// ----- clinical reports (specialist visits attached to an organ) -----
+
+const REPORT_REGIONS = ['brain', 'neck', 'heart', 'lungs', 'liver', 'gut', 'kidney', 'systemic'];
+const REPORT_STAGES = ['normal', 'mild', 'moderate', 'severe', 'critical', 'unknown'];
+const REPORTS_DIR = path.resolve(__dirname, '../data/reports');
+const MAX_REPORT_FILE_BYTES = 25 * 1024 * 1024;
+
+/** Extension whitelist — the stored name is derived from the report id, never from user input. */
+const REPORT_EXTENSIONS: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+function reportId(): string {
+  return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+app.get('/api/reports', (_req, res) => {
+  res.json({ reports: getReports() });
+});
+
+/** Vision pass over a clinical report — proposes a staging, saves nothing. */
+app.post('/api/reports/analyze', async (req, res) => {
+  const pages = req.body?.pages;
+  if (!Array.isArray(pages) || pages.length === 0) {
+    res.status(400).json({ error: 'pages must be a non-empty array' });
+    return;
+  }
+  try {
+    const result = await analyzeReport(
+      pages.map((p: Record<string, unknown>) => ({
+        name: String(p.name ?? 'page'),
+        imageBase64: String(p.imageBase64 ?? ''),
+        mime: String(p.mime ?? 'image/jpeg'),
+      })),
+    );
+    res.json(result);
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'NO_API_KEY' || e.code === 'BAD_REQUEST') {
+      res.status(400).json({ error: e.message, code: e.code });
+      return;
+    }
+    console.error('[reports/analyze]', e.message);
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.post('/api/reports', (req, res) => {
+  const b = req.body ?? {};
+  if (!isIsoDate(b.date)) {
+    res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    return;
+  }
+  const region = REPORT_REGIONS.includes(String(b.region)) ? String(b.region) : 'systemic';
+  const stage = REPORT_STAGES.includes(String(b.stage)) ? String(b.stage) : 'unknown';
+  const id = reportId();
+
+  // optional original document, stored under server/data/reports
+  let filePath: string | null = null;
+  let mime: string | null = null;
+  if (typeof b.fileBase64 === 'string' && b.fileBase64.length > 0) {
+    const declared = String(b.mime ?? '');
+    const ext = REPORT_EXTENSIONS[declared];
+    if (!ext) {
+      res.status(400).json({ error: `Unsupported file type "${declared}". Use PDF, JPG, PNG or WebP.` });
+      return;
+    }
+    const buffer = Buffer.from(b.fileBase64, 'base64');
+    if (buffer.byteLength === 0) {
+      res.status(400).json({ error: 'fileBase64 did not decode to any content' });
+      return;
+    }
+    if (buffer.byteLength > MAX_REPORT_FILE_BYTES) {
+      res.status(400).json({ error: 'File is larger than 25 MB' });
+      return;
+    }
+    mkdirSync(REPORTS_DIR, { recursive: true });
+    filePath = path.join(REPORTS_DIR, `${id}.${ext}`);
+    writeFileSync(filePath, buffer);
+    mime = declared;
+  }
+
+  const report = insertReport(id, {
+    date: b.date as string,
+    title: String(b.title ?? 'Clinical report').slice(0, 120),
+    specialty: String(b.specialty ?? '').slice(0, 60),
+    region,
+    stage,
+    stageSource: b.stageSource === 'user' ? 'user' : 'ai',
+    stageRationale: String(b.stageRationale ?? '').slice(0, 400),
+    summary: String(b.summary ?? '').slice(0, 4000),
+    findings: Array.isArray(b.findings)
+      ? (b.findings as unknown[]).map((f) => String(f).slice(0, 400)).slice(0, 8)
+      : [],
+    followUp: String(b.followUp ?? '').slice(0, 600),
+    fileName: String(b.fileName ?? '').slice(0, 200),
+    filePath,
+    mime,
+  });
+  res.json(report);
+});
+
+/** User override of the AI proposal (stage, region, date, title). */
+app.patch('/api/reports/:id', (req, res) => {
+  const b = req.body ?? {};
+  const patch: Record<string, string> = {};
+  if (b.date !== undefined) {
+    if (!isIsoDate(b.date)) {
+      res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+      return;
+    }
+    patch.date = b.date as string;
+  }
+  if (b.region !== undefined) {
+    if (!REPORT_REGIONS.includes(String(b.region))) {
+      res.status(400).json({ error: 'unknown region' });
+      return;
+    }
+    patch.region = String(b.region);
+  }
+  if (b.stage !== undefined) {
+    if (!REPORT_STAGES.includes(String(b.stage))) {
+      res.status(400).json({ error: 'unknown stage' });
+      return;
+    }
+    patch.stage = String(b.stage);
+    patch.stageSource = 'user'; // an explicit stage change is always a human decision
+  }
+  if (b.title !== undefined) patch.title = String(b.title).slice(0, 120);
+  if (b.specialty !== undefined) patch.specialty = String(b.specialty).slice(0, 60);
+
+  const updated = updateReport(req.params.id, patch);
+  if (!updated) {
+    res.status(404).json({ error: 'report not found' });
+    return;
+  }
+  res.json(updated);
+});
+
+app.get('/api/reports/:id/file', (req, res) => {
+  const file = getReportFile(req.params.id);
+  if (!file) {
+    res.status(404).json({ error: 'no stored document for this report' });
+    return;
+  }
+  // paths are generated server-side from the report id, so they cannot escape REPORTS_DIR
+  res.type(file.mime ?? 'application/octet-stream');
+  res.sendFile(file.filePath, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'stored document is missing' });
+  });
+});
+
+app.delete('/api/reports/:id', (req, res) => {
+  const { deleted, filePath } = deleteReport(req.params.id);
+  if (deleted && filePath) rmSync(filePath, { force: true });
+  res.json({ ok: deleted });
+});
+
 // ---------- static frontend (production) ----------
 
 const distPath = path.resolve(__dirname, '../../dist');
@@ -367,5 +535,5 @@ app.get(/^\/(?!api\/).*/, (_req, res) => {
 
 const port = Number(process.env.PORT ?? 3101);
 app.listen(port, () => {
-  console.log(`[vitals-hud] API + static server → http://localhost:${port}`);
+  console.log(`[vitals-hub] API + static server → http://localhost:${port}`);
 });

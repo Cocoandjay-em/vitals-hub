@@ -38,7 +38,7 @@ export function clearLegacyHistory(): void {
 
 export function exportHistory(history: TestRecord[]): void {
   const payload = {
-    app: 'vitals-hud',
+    app: 'vitals-hub',
     version: 1,
     exportedAt: new Date().toISOString(),
     records: history,
@@ -47,7 +47,7 @@ export function exportHistory(history: TestRecord[]): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `vitals-hud-export-${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `vitals-hub-export-${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   URL.revokeObjectURL(url)
 }

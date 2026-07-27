@@ -409,6 +409,121 @@ export async function analyzePanel(markers: AnalysisMarker[], date?: string): Pr
   )
 }
 
+/* --------------------- clinical report understanding --------------------- */
+
+const REPORT_REGIONS = ['brain', 'neck', 'heart', 'lungs', 'liver', 'gut', 'kidney', 'systemic'] as const
+const REPORT_STAGES = ['normal', 'mild', 'moderate', 'severe', 'critical', 'unknown'] as const
+
+export interface AiReportResult {
+  date: string | null
+  title: string
+  specialty: string
+  region: (typeof REPORT_REGIONS)[number]
+  stage: (typeof REPORT_STAGES)[number]
+  stageRationale: string
+  summary: string
+  findings: string[]
+  followUp: string
+}
+
+const REPORT_PROMPT = `You are a medical-document assistant inside a personal health dashboard. These images are pages of ONE clinical report from a specialist visit (for example neurology, cardiology, radiology) — a narrative document, not a laboratory result table.
+
+Return ONLY a JSON object (no markdown, no commentary) with this exact shape:
+{
+  "date": "YYYY-MM-DD" | null,
+  "title": string,
+  "specialty": string,
+  "region": "brain" | "neck" | "heart" | "lungs" | "liver" | "gut" | "kidney" | "systemic",
+  "stage": "normal" | "mild" | "moderate" | "severe" | "critical" | "unknown",
+  "stageRationale": string,
+  "summary": string,
+  "findings": string[],
+  "followUp": string
+}
+
+Rules:
+- "date" is the date of the VISIT or examination (never the print date, never the patient's date of birth). null if not visible.
+- "title" is a short label for the document, max 60 characters (e.g. "Neurology consultation — migraine follow-up").
+- "specialty" is the medical specialty of the author (e.g. "Neurology"). Empty string if unclear.
+- "region" is the body area the report is about, mapped to the closest option: brain/nervous system => "brain"; thyroid, neck or hormones => "neck"; heart, vessels or blood pressure => "heart"; lungs or airways => "lungs"; liver => "liver"; stomach, bowel, pancreas or metabolism => "gut"; kidneys, bladder or urinary tract => "kidney"; blood, immune system or anything whole-body => "systemic".
+- "stage" reflects ONLY the severity the report itself documents — never your own diagnosis and never a prognosis:
+  "normal" = explicitly reassuring, no abnormality found;
+  "mild" = minor or stable findings, routine follow-up;
+  "moderate" = clear abnormality needing treatment or monitoring;
+  "severe" = major abnormality, significant impairment or urgent treatment described;
+  "critical" = the report itself describes an emergency or immediate intervention;
+  "unknown" = the document does not state enough to judge.
+  When torn between two stages, choose the LESS severe one.
+- "stageRationale" is ONE short sentence quoting or paraphrasing the wording in the report that justifies the stage.
+- "summary" is 2-4 plain-language sentences a layperson can understand: why the visit happened and what the clinician concluded.
+- "findings" is 2-6 short bullet strings copied faithfully from the report's own findings, conclusions or diagnoses. No invented content.
+- "followUp" is any next step the report requests (repeat exam, referral, therapy, review date). Empty string if none.
+- NEVER invent findings, dates, medication or values that are not printed in the document.
+- Do not include patient names or identifiers anywhere in the output.`
+
+function validateReportResult(raw: unknown): AiReportResult {
+  if (typeof raw !== 'object' || raw === null) throw new Error('Model JSON is not an object.')
+  const obj = raw as Record<string, unknown>
+  const str = (v: unknown, max: number): string =>
+    typeof v === 'string' ? v.trim().slice(0, max) : ''
+  const region = REPORT_REGIONS.includes(obj.region as (typeof REPORT_REGIONS)[number])
+    ? (obj.region as (typeof REPORT_REGIONS)[number])
+    : 'systemic'
+  const stage = REPORT_STAGES.includes(obj.stage as (typeof REPORT_STAGES)[number])
+    ? (obj.stage as (typeof REPORT_STAGES)[number])
+    : 'unknown'
+  const findings = Array.isArray(obj.findings)
+    ? obj.findings
+        .filter((f): f is string => typeof f === 'string' && f.trim() !== '')
+        .map((f) => f.trim().slice(0, 400))
+        .slice(0, 8)
+    : []
+  const summary = str(obj.summary, 1500)
+  if (!summary && findings.length === 0) throw new Error('Model returned no summary and no findings.')
+  return {
+    date: typeof obj.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(obj.date) ? obj.date : null,
+    title: str(obj.title, 120) || 'Clinical report',
+    specialty: str(obj.specialty, 60),
+    region,
+    stage,
+    stageRationale: str(obj.stageRationale, 400),
+    summary,
+    findings,
+    followUp: str(obj.followUp, 600),
+  }
+}
+
+const MAX_REPORT_PAGES = 8
+
+/**
+ * Read one clinical report (all pages in a single vision call so the model can
+ * weigh the whole document before staging it).
+ */
+export async function analyzeReport(pages: ExtractPageInput[]): Promise<AiReportResult> {
+  if (!resolveConfig().hasKey) {
+    throw Object.assign(new Error('Add your API key in Settings.'), { code: 'NO_API_KEY' })
+  }
+  if (pages.length === 0) {
+    throw Object.assign(new Error('pages must be a non-empty array'), { code: 'BAD_REQUEST' })
+  }
+  const used = pages.slice(0, MAX_REPORT_PAGES)
+  return postChatWithRetry(
+    [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: REPORT_PROMPT },
+          ...used.map((p) => ({
+            type: 'image_url',
+            image_url: { url: `data:${p.mime ?? 'image/jpeg'};base64,${p.imageBase64}` },
+          })),
+        ],
+      },
+    ],
+    (content) => validateReportResult(extractJson(content)),
+  )
+}
+
 /** Cheap connectivity check: list models (or report the provider error). */
 export async function testConnection(): Promise<{ ok: boolean; detail: string }> {  const { baseUrl, apiKey, hasKey } = resolveConfig()
   if (!hasKey || !apiKey) return { ok: false, detail: 'No API key configured.' }

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BiomarkerReading, Category, Flag } from '@/types/biomarker'
+import type { ClinicalReport, Stage } from '@/types/report'
+import { STAGE_COLOR, STAGE_RANK } from '@/types/report'
 import { cn } from '@/lib/utils'
 import { OrganInfo } from '@/components/OrganInfo'
 
-export type RegionId = 'neck' | 'heart' | 'lungs' | 'liver' | 'gut' | 'kidney' | 'systemic'
+export type RegionId = 'brain' | 'neck' | 'heart' | 'lungs' | 'liver' | 'gut' | 'kidney' | 'systemic'
 
 /** One organ-shaped glow: ellipse centred at (x,y) % of the hologram container. */
 interface GlowShape {
@@ -36,6 +38,16 @@ interface RegionDef {
  * Centers measured at full resolution against the actual hologram image.
  */
 export const REGIONS: RegionDef[] = [
+  {
+    id: 'brain',
+    title: 'Brain & Nervous System',
+    tag: 'BRAIN',
+    shapes: [{ x: 50, y: 7.5, w: 9, h: 5 }],
+    // no blood-panel category maps here: the brain is driven by clinical reports
+    categories: [],
+    dot: { x: 50, y: 7.5 },
+    chipSide: 'right',
+  },
   {
     id: 'neck',
     title: 'Thyroid & Hormones',
@@ -142,6 +154,28 @@ export interface RegionState {
   target: string
   /** 0..1 — how far the worst value sits beyond its reference bound */
   intensity: number
+  /** clinical reports attached to this region, newest visit first */
+  reports: ClinicalReport[]
+  /** worst documented stage across those reports (null when there are none) */
+  stage: Stage | null
+}
+
+/** Flag severity on the same scale as STAGE_RANK, so the two can be compared. */
+const FLAG_SEVERITY: Record<Flag, number> = { high: 3, low: 3, unknown: 0, normal: 1 }
+
+/**
+ * A region's colour: whichever signal is more severe wins — an out-of-range
+ * biomarker or a staged clinical report. Ties go to the report, which is the
+ * more specific clinical statement.
+ */
+export function regionColor(r: RegionState): string {
+  if (!r.stage) return FLAG_COLOR[r.worst]
+  return STAGE_RANK[r.stage] >= FLAG_SEVERITY[r.worst] ? STAGE_COLOR[r.stage] : FLAG_COLOR[r.worst]
+}
+
+/** A region lights up when it has markers or at least one attached report. */
+export function regionHasData(r: RegionState): boolean {
+  return r.markers.length > 0 || r.reports.length > 0
 }
 
 interface BodyMapProps {
@@ -165,10 +199,22 @@ function deviation(m: BiomarkerReading): number {
   return 0
 }
 
-export function buildRegions(markers: BiomarkerReading[]): RegionState[] {
+export function buildRegions(
+  markers: BiomarkerReading[],
+  reports: ClinicalReport[] = [],
+): RegionState[] {
   const out: RegionState[] = []
   for (const def of REGIONS) {
     const inRegion = markers.filter((m) => def.categories.includes(m.category))
+    const regionReports = reports
+      .filter((r) => r.region === def.id)
+      .sort((a, b) => b.date.localeCompare(a.date))
+    const stage = regionReports.reduce<Stage | null>(
+      (acc, r) => (acc === null || STAGE_RANK[r.stage] > STAGE_RANK[acc] ? r.stage : acc),
+      null,
+    )
+    const reportTag = regionReports.length > 0 ? ` · ${regionReports.length}R` : ''
+
     if (inRegion.length === 0) {
       // always render every region — empty ones get a dim "no data" dot that
       // still opens the info card with a static organ description
@@ -178,9 +224,12 @@ export function buildRegions(markers: BiomarkerReading[]): RegionState[] {
         worst: 'unknown',
         highCount: 0,
         lowCount: 0,
-        label: `${def.tag} · NO DATA`,
+        label: stage ? `${def.tag} · ${stage.toUpperCase()}` : `${def.tag} · NO DATA`,
         target: '',
-        intensity: 0,
+        // a staged report alone should still light the organ up
+        intensity: stage ? Math.min(1, 0.3 + STAGE_RANK[stage] * 0.14) : 0,
+        reports: regionReports,
+        stage,
       })
       continue
     }
@@ -205,9 +254,11 @@ export function buildRegions(markers: BiomarkerReading[]): RegionState[] {
       worst,
       highCount,
       lowCount,
-      label: `${def.tag} · ${parts.join(' · ')}`,
+      label: `${def.tag} · ${parts.join(' · ')}${reportTag}`,
       target: (flagged ?? inRegion[0]).name,
-      intensity,
+      intensity: stage ? Math.max(intensity, Math.min(1, 0.3 + STAGE_RANK[stage] * 0.14)) : intensity,
+      reports: regionReports,
+      stage,
     })
   }
   return out

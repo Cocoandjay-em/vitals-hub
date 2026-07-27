@@ -1,7 +1,8 @@
 import type { BiomarkerReading, Category, Flag, TestRecord } from '@/types/biomarker'
+import type { ClinicalReport, ReportAnalysis } from '@/types/report'
 
 /**
- * Typed client for the Vitals HUD backend.
+ * Typed client for the Vitals Hub backend.
  * In dev, Vite proxies /api → localhost:3101; in production the same
  * Express process serves both the API and the built frontend.
  */
@@ -251,6 +252,54 @@ export async function explainMarker(input: MarkerExplainInput): Promise<string> 
     jsonInit('POST', input),
   )
   return data.explanation
+}
+
+/* --------------------------- clinical reports ---------------------------- */
+
+export async function getReports(): Promise<ClinicalReport[]> {
+  const data = await request<{ reports: ClinicalReport[] }>('/api/reports')
+  return data.reports
+}
+
+/** Vision pass over a clinical report — returns a proposal, saves nothing. */
+export async function analyzeReport(pages: PageImage[]): Promise<ReportAnalysis> {
+  return request<ReportAnalysis>('/api/reports/analyze', jsonInit('POST', { pages }))
+}
+
+export interface SaveReportInput {
+  date: string
+  title: string
+  specialty: string
+  region: string
+  stage: string
+  stageSource: 'ai' | 'user'
+  stageRationale: string
+  summary: string
+  findings: string[]
+  followUp: string
+  fileName: string
+  /** original document, kept alongside the record */
+  fileBase64?: string
+  mime?: string
+}
+
+export async function saveReport(input: SaveReportInput): Promise<ClinicalReport> {
+  return request<ClinicalReport>('/api/reports', jsonInit('POST', input))
+}
+
+export async function patchReport(
+  id: string,
+  patch: { date?: string; region?: string; stage?: string; title?: string; specialty?: string },
+): Promise<ClinicalReport> {
+  return request<ClinicalReport>(`/api/reports/${id}`, jsonInit('PATCH', patch))
+}
+
+export async function deleteReport(id: string): Promise<void> {
+  await request(`/api/reports/${id}`, { method: 'DELETE' })
+}
+
+export function reportFileUrl(id: string): string {
+  return `/api/reports/${id}/file`
 }
 
 /* ------------------------------ Apple Health ----------------------------- */

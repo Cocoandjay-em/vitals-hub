@@ -1,4 +1,4 @@
-# Vitals HUD — Blood Biomarker Dashboard
+# Vitals Hub — Blood Biomarker Dashboard
 
 A local-first, futuristic medical HUD for tracking blood-test biomarkers over time.
 Upload lab reports (PDF / JPG / PNG), extract biomarker rows with an AI vision model
