@@ -318,6 +318,32 @@ decimal commas, both thousands separators, printed flag words, and a ~90-name
 marker dictionary with English and Italian aliases. Ambiguous numeric dates are
 read day-first.
 
+## Help wanted: the body shapes
+
+**The 3D bodies are still a work in progress and I would be glad of help.**
+
+The anatomy comes from real cadaver scans, so each body carries its donor's
+build and the organs were authored against a different scan than the skin.
+`scripts/reshape-anatomy.mjs` currently corrects this with maths — a vertical
+narrowing profile over the torso, organs rescaled to adult reference dimensions
+and slid into their anatomical band, and the same profile applied to the viscera
+so nothing pokes through the abdominal wall. It is measurably better, but
+sculpting a cadaver mesh with a cosine profile has a ceiling.
+
+Ideas, pull requests and better meshes are all welcome:
+
+- Swapping the skin shell for a well-proportioned CC0 base mesh (Blender
+  Studio's Human Base Meshes, MakeHuman) while keeping the real organs inside.
+- A proper morph-target rig instead of the current per-vertex profile, so body
+  shape could follow the user's own height and weight.
+- Better bust and hip shaping — the current version is a radial dome, which is
+  crude.
+- More organs: thyroid, pancreas, spleen, bladder, and a real diaphragm.
+
+Open an issue or a PR. If you change the meshes, re-run
+`node scripts/reshape-anatomy.mjs --dry` and include the before/after numbers,
+and remember the body pass is not idempotent — start from pristine meshes.
+
 ## Limitations
 
 - Extraction quality depends on the model and the scan. Always review the parsed

@@ -1,10 +1,14 @@
 import './node-shims'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 // run text extraction on the main thread in node tests
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  '/Users/emanuelenicolella/Public/GitHub/Htech/biomarker-hud/node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'
+// resolved from the working directory: these scripts are bundled to a temp
+// file before running, so a path relative to the source would not survive
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolve(
+  'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+)
 import { detectTestDate, parseBiomarkers } from '@/lib/parser'
 
 const data = new Uint8Array(readFileSync('scripts/sample-lab.pdf'))

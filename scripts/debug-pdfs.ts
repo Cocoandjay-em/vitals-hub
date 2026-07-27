@@ -1,13 +1,22 @@
 import './node-shims'
 import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { detectTestDate, parseBiomarkers } from '@/lib/parser'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  '/Users/emanuelenicolella/Public/GitHub/Htech/biomarker-hud/node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'
+// resolved from the working directory: these scripts are bundled to a temp
+// file before running, so a path relative to the source would not survive
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolve(
+  'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+)
 
-const DIR = '/Users/emanuelenicolella/Public/GitHub/Htech/sample-reports'
+// Pass a folder of your own reports: debug-pdfs ./some-folder
+// Keep real reports outside the repo — never commit them.
+const DIR = process.argv[2]
+if (!DIR) {
+  console.error('usage: debug-pdfs <folder-of-pdfs>')
+  process.exit(1)
+}
 
 // --- same line-reconstruction logic as src/lib/extract.ts ---
 async function extractText(file: string): Promise<string> {
