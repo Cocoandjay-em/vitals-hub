@@ -1,4 +1,4 @@
-import type { RegionId } from '@/components/BodyMap'
+import type { RegionId } from '@/lib/regions'
 
 /**
  * Clinical reports: narrative documents from a specialist visit (neurology,

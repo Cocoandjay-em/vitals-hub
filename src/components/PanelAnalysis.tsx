@@ -63,42 +63,49 @@ function AnalysisText({ text }: { text: string }) {
 /** Full-panel AI analysis card shown above the results table. */
 export function PanelAnalysis({ record, onClose, onOpenSettings }: PanelAnalysisProps) {
   const key = useMemo(() => markersHash('panel', record.date, record.markers), [record])
-  const [state, setState] = useState<AnalysisState>({ kind: 'loading' })
-
-  const load = useCallback(async () => {
-    const cached = cache.get(key)
-    if (cached) {
-      setState({ kind: 'text', text: cached, cached: true })
-      return
-    }
-    setState({ kind: 'loading' })
-    try {
-      const text = await analyzePanel({
-        date: record.date,
-        markers: record.markers.map((m) => ({
-          name: m.name,
-          value: m.value,
-          unit: m.unit,
-          refLow: m.refLow,
-          refHigh: m.refHigh,
-          flag: m.flag,
-          category: m.category,
-        })),
-      })
-      cache.set(key, text)
-      setState({ kind: 'text', text, cached: false })
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'NO_API_KEY') {
-        setState({ kind: 'no-key' })
-        return
-      }
-      setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
-    }
-  }, [key, record])
+  // a cache hit is known during render, so it never needs an effect
+  const cached = useMemo(() => cache.get(key), [key])
+  const [fetched, setFetched] = useState<AnalysisState | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const state: AnalysisState = cached
+    ? { kind: 'text', text: cached, cached: true }
+    : (fetched ?? { kind: 'loading' })
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (cached) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const text = await analyzePanel({
+          date: record.date,
+          markers: record.markers.map((m) => ({
+            name: m.name,
+            value: m.value,
+            unit: m.unit,
+            refLow: m.refLow,
+            refHigh: m.refHigh,
+            flag: m.flag,
+            category: m.category,
+          })),
+        })
+        cache.set(key, text)
+        if (!cancelled) setFetched({ kind: 'text', text, cached: false })
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.code === 'NO_API_KEY') {
+          setFetched({ kind: 'no-key' })
+          return
+        }
+        setFetched({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
+    })()
+    // switching the viewed panel mid-flight must not overwrite the new one
+    return () => {
+      cancelled = true
+    }
+  }, [key, cached, record, attempt])
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   return (
     <div className="rounded-sm border border-fuchsia-400/30 bg-fuchsia-950/15 p-3 shadow-[0_0_24px_rgba(232,121,249,0.08)]">
@@ -146,7 +153,7 @@ export function PanelAnalysis({ record, onClose, onOpenSettings }: PanelAnalysis
         <div className="flex items-start gap-2">
           <p className="flex-1 text-[11px] leading-relaxed text-amber-300/90">{state.message}</p>
           <button
-            onClick={() => void load()}
+            onClick={retry}
             className="hud-mono flex shrink-0 items-center gap-1 rounded-sm border border-cyan-400/30 px-2 py-1 text-[9px] tracking-wider text-cyan-200/90 transition hover:bg-cyan-400/10"
           >
             <RefreshCw className="h-3 w-3" /> RETRY

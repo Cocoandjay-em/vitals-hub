@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { BiomarkerReading } from '@/types/biomarker'
-import { FLAG_COLORS } from '@/components/RangeBar'
+import { FLAG_COLORS } from '@/lib/flags'
 
 export interface TrendPoint {
   date: string

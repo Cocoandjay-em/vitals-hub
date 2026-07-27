@@ -6,12 +6,12 @@ import type { BiomarkerReading } from '@/types/biomarker'
 import type { ClinicalReport } from '@/types/report'
 import {
   buildRegions,
-  FLAG_COLOR,
   regionColor,
   regionHasData,
   type RegionId,
   type RegionState,
-} from '@/components/BodyMap'
+} from '@/lib/regions'
+import { FLAG_COLOR } from '@/lib/flags'
 import { OrganInfo } from '@/components/OrganInfo'
 import { cn } from '@/lib/utils'
 
@@ -251,7 +251,7 @@ function OrganGlow({
 }) {
   const matRef = useRef<THREE.SpriteMaterial>(null)
   const spriteRef = useRef<THREE.Sprite>(null)
-  const texture = useMemo(makeGlowTexture, [])
+  const texture = useMemo(() => makeGlowTexture(), [])
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime()
     const pulse = 0.75 + 0.25 * Math.sin(t * 2.2 + index * 1.3)

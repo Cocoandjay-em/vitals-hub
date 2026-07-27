@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import type { BiomarkerReading } from '@/types/biomarker'
 import { explainMarker, ApiError } from '@/lib/api'
@@ -15,39 +15,44 @@ type State =
 /** Inline "what does this value mean" mini-card shown under a results-table row. */
 export function MarkerMeaning({ marker }: { marker: BiomarkerReading }) {
   const key = `marker|${marker.name.toLowerCase()}:${marker.value}:${marker.flag}`
-  const [state, setState] = useState<State>({ kind: 'loading' })
-
-  const load = useCallback(async () => {
-    const cached = cache.get(key)
-    if (cached) {
-      setState({ kind: 'text', text: cached })
-      return
-    }
-    setState({ kind: 'loading' })
-    try {
-      const text = await explainMarker({
-        name: marker.name,
-        value: marker.value,
-        unit: marker.unit,
-        refLow: marker.refLow,
-        refHigh: marker.refHigh,
-        flag: marker.flag,
-        category: marker.category,
-      })
-      cache.set(key, text)
-      setState({ kind: 'text', text })
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'NO_API_KEY') {
-        setState({ kind: 'no-key' })
-        return
-      }
-      setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
-    }
-  }, [key, marker])
+  // a cache hit is known during render, so it never needs an effect
+  const cached = useMemo(() => cache.get(key), [key])
+  const [fetched, setFetched] = useState<State | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const state: State = cached ? { kind: 'text', text: cached } : (fetched ?? { kind: 'loading' })
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (cached) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const text = await explainMarker({
+          name: marker.name,
+          value: marker.value,
+          unit: marker.unit,
+          refLow: marker.refLow,
+          refHigh: marker.refHigh,
+          flag: marker.flag,
+          category: marker.category,
+        })
+        cache.set(key, text)
+        if (!cancelled) setFetched({ kind: 'text', text })
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.code === 'NO_API_KEY') {
+          setFetched({ kind: 'no-key' })
+          return
+        }
+        setFetched({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
+    })()
+    // a late response for a previous marker must not overwrite the current one
+    return () => {
+      cancelled = true
+    }
+  }, [key, cached, attempt, marker])
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   return (
     <div className="border-t border-fuchsia-400/15 bg-fuchsia-950/10 px-3 py-2">
@@ -68,7 +73,7 @@ export function MarkerMeaning({ marker }: { marker: BiomarkerReading }) {
         <div className="flex items-start gap-2">
           <p className="flex-1 text-[11px] text-amber-300/90">{state.message}</p>
           <button
-            onClick={() => void load()}
+            onClick={retry}
             className="hud-mono flex shrink-0 items-center gap-1 rounded-sm border border-cyan-400/30 px-1.5 py-0.5 text-[9px] tracking-wider text-cyan-200/90 transition hover:bg-cyan-400/10"
           >
             <RefreshCw className="h-2.5 w-2.5" /> RETRY

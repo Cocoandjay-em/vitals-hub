@@ -9,7 +9,7 @@ import * as api from '@/lib/api'
 import { buildDemoRecords } from '@/lib/demoData'
 import { Header } from '@/components/Header'
 import { HudPanel } from '@/components/HudPanel'
-import { FLAG_COLOR } from '@/components/BodyMap'
+import { FLAG_COLOR } from '@/lib/flags'
 import { BodyScan3D, type BodySex } from '@/components/BodyScan3D'
 import { UploadZone } from '@/components/UploadZone'
 import { ExtractionReview } from '@/components/ExtractionReview'
@@ -183,7 +183,16 @@ export default function Home() {
       if (!r || !r.ok) return
       const date = dateOverride ?? r.date
       if (!date) return
-      const markers = r.rows.map(({ sourceLine: _sourceLine, ...m }) => m)
+      // drop sourceLine — it is parser provenance, not part of the saved record
+      const markers: BiomarkerReading[] = r.rows.map((row) => ({
+        name: row.name,
+        category: row.category,
+        value: row.value,
+        unit: row.unit,
+        refLow: row.refLow,
+        refHigh: row.refHigh,
+        flag: row.flag,
+      }))
       try {
         await api.saveTest({ date, source: r.fileName, biomarkers: markers })
       } catch (err) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FileText, Loader2, RefreshCw, Sparkles, Trash2, X } from 'lucide-react'
-import type { RegionId, RegionState } from '@/components/BodyMap'
-import { regionColor } from '@/components/BodyMap'
+import type { RegionId, RegionState } from '@/lib/regions'
+import { regionColor } from '@/lib/regions'
 import { FlagBadge } from '@/components/RangeBar'
 import { STAGE_COLOR, STAGE_LABEL, STAGES, type Stage } from '@/types/report'
 import { explain, ApiError, reportFileUrl } from '@/lib/api'
@@ -177,47 +177,56 @@ export function OrganInfo({
 }: OrganInfoProps) {
   const color = regionColor(region)
   const key = useMemo(() => markersHash(region.def.id, date, region.markers), [region, date])
-  const [state, setState] = useState<ExplState>({ kind: 'loading' })
 
-  const load = useCallback(async () => {
-    // empty region: static organ description, no AI call needed
-    if (region.markers.length === 0) {
-      setState({ kind: 'fallback', text: staticText(region) })
-      return
-    }
+  /**
+   * Whatever is already known during render — a marker-less region needs no AI
+   * call at all, and a cache hit is instant. Only a real fetch needs an effect.
+   */
+  const immediate = useMemo<ExplState | null>(() => {
+    if (region.markers.length === 0) return { kind: 'fallback', text: staticText(region) }
     const cached = cache.get(key)
-    if (cached) {
-      setState({ kind: 'text', text: cached, cached: true })
-      return
-    }
-    setState({ kind: 'loading' })
-    try {
-      const text = await explain({
-        region: region.def.id,
-        date,
-        markers: region.markers.map((m) => ({
-          name: m.name,
-          value: m.value,
-          unit: m.unit,
-          refLow: m.refLow,
-          refHigh: m.refHigh,
-          flag: m.flag,
-        })),
-      })
-      cache.set(key, text)
-      setState({ kind: 'text', text, cached: false })
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'NO_API_KEY') {
-        setState({ kind: 'fallback', text: fallbackText(region) })
-        return
-      }
-      setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
-    }
-  }, [key, region, date])
+    return cached ? { kind: 'text', text: cached, cached: true } : null
+  }, [region, key])
+
+  const [fetched, setFetched] = useState<ExplState | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const state: ExplState = immediate ?? fetched ?? { kind: 'loading' }
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (immediate) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const text = await explain({
+          region: region.def.id,
+          date,
+          markers: region.markers.map((m) => ({
+            name: m.name,
+            value: m.value,
+            unit: m.unit,
+            refLow: m.refLow,
+            refHigh: m.refHigh,
+            flag: m.flag,
+          })),
+        })
+        cache.set(key, text)
+        if (!cancelled) setFetched({ kind: 'text', text, cached: false })
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.code === 'NO_API_KEY') {
+          setFetched({ kind: 'fallback', text: fallbackText(region) })
+          return
+        }
+        setFetched({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
+    })()
+    // clicking another organ mid-flight must not overwrite the new card
+    return () => {
+      cancelled = true
+    }
+  }, [immediate, key, region, date, attempt])
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
 
   return (
     <div
@@ -317,7 +326,7 @@ export function OrganInfo({
           <div className="flex items-start gap-2">
             <p className="flex-1 text-[11px] leading-relaxed text-amber-300/90">{state.message}</p>
             <button
-              onClick={() => void load()}
+              onClick={retry}
               className="hud-mono flex shrink-0 items-center gap-1 rounded-sm border border-cyan-400/30 px-2 py-1 text-[9px] tracking-wider text-cyan-200/90 transition hover:bg-cyan-400/10"
             >
               <RefreshCw className="h-3 w-3" /> RETRY

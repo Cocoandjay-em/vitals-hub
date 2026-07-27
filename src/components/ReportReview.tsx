@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, FileText, Trash2 } from 'lucide-react'
-import type { RegionId } from '@/components/BodyMap'
-import { REGIONS } from '@/components/BodyMap'
+import type { RegionId } from '@/lib/regions'
+import { REGIONS } from '@/lib/regions'
 import { STAGE_COLOR, STAGE_LABEL, STAGES, type ReportAnalysis, type Stage } from '@/types/report'
 
 /**

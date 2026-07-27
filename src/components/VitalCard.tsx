@@ -1,5 +1,5 @@
 import type { Flag } from '@/types/biomarker'
-import { FLAG_COLOR } from '@/components/BodyMap'
+import { FLAG_COLOR } from '@/lib/flags'
 import { cn } from '@/lib/utils'
 
 export interface VitalSeries {

@@ -1,18 +1,5 @@
 import type { Flag } from '@/types/biomarker'
-
-export const FLAG_COLORS: Record<Flag, string> = {
-  high: '#f43f5e',
-  low: '#f59e0b',
-  normal: '#34d399',
-  unknown: '#64748b',
-}
-
-export const FLAG_LABELS: Record<Flag, string> = {
-  high: 'HIGH',
-  low: 'LOW',
-  normal: 'NORMAL',
-  unknown: 'N/A',
-}
+import { FLAG_COLORS, FLAG_LABELS } from '@/lib/flags'
 
 interface RangeBarProps {
   value: number
