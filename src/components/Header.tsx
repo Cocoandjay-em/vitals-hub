@@ -2,15 +2,25 @@ import { Activity } from 'lucide-react'
 import { EcgLine } from '@/components/EcgLine'
 import { HudDial } from '@/components/HudDial'
 import type { TestRecord } from '@/types/biomarker'
+import { ageFromBirthDate, type Profile } from '@/lib/api'
 
 interface HeaderProps {
   latest: TestRecord | null
+  /** whose records these are — shown once a profile has been filled in */
+  profile?: Profile | null
 }
 
-export function Header({ latest }: HeaderProps) {
+export function Header({ latest, profile }: HeaderProps) {
   const counts = { high: 0, low: 0, normal: 0, unknown: 0 }
   for (const m of latest?.markers ?? []) counts[m.flag] += 1
   const total = latest?.markers.length ?? 0
+
+  const fullName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ').trim()
+  const age = profile?.birthDate ? ageFromBirthDate(profile.birthDate) : null
+  const subtitle =
+    fullName || age != null
+      ? [fullName, age != null ? `${age} years` : null].filter(Boolean).join(' · ')
+      : 'Blood biomarker dashboard · self-hosted'
 
   return (
     <header className="hud-panel relative overflow-hidden rounded-sm">
@@ -27,7 +37,7 @@ export function Header({ latest }: HeaderProps) {
             <h1 className="hud-mono text-xl font-bold tracking-[0.22em] text-cyan-200 hud-glow-cyan">
               VITALS&nbsp;HUB
             </h1>
-            <p className="hud-label mt-0.5">Blood biomarker dashboard · local-first</p>
+            <p className="hud-label mt-0.5">{subtitle}</p>
           </div>
         </div>
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Database, Download, Eraser, FileText, FileUp, HeartPulse, Loader2, PenLine, Scale, Settings, Sparkles, Table2, Thermometer, TriangleAlert, Upload, X } from 'lucide-react'
+import { Activity, Database, Download, Eraser, FileText, FileUp, HeartPulse, Loader2, PenLine, Scale, Settings, Sparkles, Table2, Thermometer, TriangleAlert, Upload, UserRound, X } from 'lucide-react'
 import type { BiomarkerReading, ExtractionResult, TestRecord } from '@/types/biomarker'
 import type { ClinicalReport } from '@/types/report'
 import { extractFromFile, rasteriseForAI } from '@/lib/extract'
@@ -19,6 +19,7 @@ import { HistoryList } from '@/components/HistoryList'
 import { ManualEntryForm } from '@/components/ManualEntryForm'
 import { PanelAnalysis } from '@/components/PanelAnalysis'
 import { SettingsModal } from '@/components/SettingsModal'
+import { AccountModal } from '@/components/AccountModal'
 import { VitalCard, type VitalSeries } from '@/components/VitalCard'
 import { TrendChart, type TrendPoint } from '@/components/TrendChart'
 
@@ -40,7 +41,10 @@ export default function Home() {
   const [showResults, setShowResults] = useState(false)
   const [trendOpen, setTrendOpen] = useState(false)
   const [aiEnabled, setAiEnabled] = useState(false)
-  const [bodySex, setBodySex] = useState<BodySex>('male') // profile drives the body model; owner is male
+  const [bodySex, setBodySex] = useState<BodySex>('male') // profile picks which anatomy is rendered
+  const [profile, setProfile] = useState<api.Profile | null>(null)
+  const [showAccount, setShowAccount] = useState(false)
+  const [username, setUsername] = useState('')
   const importRef = useRef<HTMLInputElement>(null)
   const ahRef = useRef<HTMLInputElement>(null)
   const reportRef = useRef<HTMLInputElement>(null)
@@ -66,7 +70,8 @@ export default function Home() {
     void refreshHistory()
     void refreshReports()
     api.getConfig().then((cfg) => setAiEnabled(cfg.hasKey)).catch(() => undefined)
-    api.getProfile().then((p) => setBodySex(p.sex)).catch(() => undefined)
+    api.getProfile().then((p) => { setProfile(p); setBodySex(p.sex) }).catch(() => undefined)
+    api.getAuthStatus().then((s) => setUsername(s.username ?? '')).catch(() => undefined)
     // Old browser-only storage is obsolete — wipe it silently; reports get re-uploaded.
     const legacy = loadLegacyHistory()
     if (legacy.length > 0) {
@@ -483,7 +488,7 @@ export default function Home() {
       {/* header spans the full width */}
       <div className="relative z-10 shrink-0 px-3 pt-3 sm:px-5 sm:pt-4">
         <div className="mx-auto w-full max-w-[1700px]">
-          <Header latest={latestMerged} />
+          <Header latest={latestMerged} profile={profile} />
         </div>
       </div>
 
@@ -586,6 +591,7 @@ export default function Home() {
           <HudButton onClick={() => { setShowResults(true); setShowAnalysis(true) }} icon={<Sparkles className="h-3 w-3" />} label="AI ANALYSIS" title="AI general analysis of the current state" disabled={!viewed || viewed.markers.length === 0} />
           <HudButton onClick={() => setTrendOpen(true)} icon={<Activity className="h-3 w-3" />} label="TREND" title="Trend chart for the selected biomarker" disabled={!trend} />
           <HudButton onClick={() => setShowSettings(true)} icon={<Settings className="h-3 w-3" />} label="AI KEY" title="AI extraction settings (API key, endpoint, model)" />
+          <HudButton onClick={() => setShowAccount(true)} icon={<UserRound className="h-3 w-3" />} label="ACCOUNT" title="Your profile (name, date of birth, body model) and password" />
         </div>
         <p className="hud-mono mt-2 text-center text-[8px] tracking-[0.2em] text-cyan-100/25">
           VITALS HUB · DATA STORED LOCALLY IN SQLITE · NOT A MEDICAL DEVICE
@@ -773,7 +779,16 @@ export default function Home() {
         open={showSettings}
         onClose={() => setShowSettings(false)}
         onConfigChange={(cfg) => setAiEnabled(cfg.hasKey)}
-        onProfileChange={(p) => setBodySex(p.sex)}
+      />
+
+      <AccountModal
+        open={showAccount}
+        onClose={() => setShowAccount(false)}
+        username={username}
+        onProfileChange={(p) => {
+          setProfile(p)
+          setBodySex(p.sex)
+        }}
       />
     </div>
   )

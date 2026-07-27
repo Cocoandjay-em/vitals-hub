@@ -89,8 +89,15 @@ app.post('/api/auth/setup', (req, res) => {
     res.status(400).json({ error: problem });
     return;
   }
+  // the profile is optional here — it can also be filled in later under ACCOUNT
+  const profileIssue = profileProblem((req.body ?? {}) as Record<string, unknown>);
+  if (profileIssue) {
+    res.status(400).json({ error: profileIssue });
+    return;
+  }
   try {
     const user = setupFirstUser(username, password);
+    writeProfile((req.body ?? {}) as Record<string, unknown>);
     issueSession(req, res, user.id);
     res.json({ username: user.username });
   } catch (err) {
@@ -220,14 +227,55 @@ app.delete('/api/history', (_req, res) => {
   res.json({ ok: true });
 });
 
-// ----- user profile (body model sex, stored in the settings table) -----
+// ----- user profile (name, birth date, body model — in the settings table) -----
 
 type ProfileSex = 'male' | 'female';
-const PROFILE_DEFAULT: ProfileSex = 'male'; // owner profile: man
+const PROFILE_DEFAULT: ProfileSex = 'male';
 
-function readProfile(): { sex: ProfileSex } {
-  const raw = getSetting('profile_sex');
-  return { sex: raw === 'female' ? 'female' : PROFILE_DEFAULT };
+interface Profile {
+  firstName: string;
+  lastName: string;
+  /** ISO yyyy-mm-dd, empty when not set */
+  birthDate: string;
+  sex: ProfileSex;
+}
+
+function readProfile(): Profile {
+  return {
+    firstName: getSetting('profile_first_name') ?? '',
+    lastName: getSetting('profile_last_name') ?? '',
+    birthDate: getSetting('profile_birth_date') ?? '',
+    sex: getSetting('profile_sex') === 'female' ? 'female' : PROFILE_DEFAULT,
+  };
+}
+
+/** null when acceptable, otherwise the reason to reject. */
+function profileProblem(b: Record<string, unknown>): string | null {
+  for (const field of ['firstName', 'lastName'] as const) {
+    const v = b[field];
+    if (v !== undefined && (typeof v !== 'string' || v.length > 80)) {
+      return `${field} must be a string of at most 80 characters`;
+    }
+  }
+  if (b.birthDate !== undefined && b.birthDate !== '') {
+    if (!isIsoDate(b.birthDate)) return 'birthDate must be YYYY-MM-DD';
+    const d = new Date(`${b.birthDate}T00:00:00Z`).getTime();
+    if (Number.isNaN(d)) return 'birthDate is not a real date';
+    if (d > Date.now()) return 'birthDate cannot be in the future';
+    if (d < Date.UTC(1900, 0, 1)) return 'birthDate must be after 1900';
+  }
+  if (b.sex !== undefined && b.sex !== 'male' && b.sex !== 'female') {
+    return "sex must be 'male' or 'female'";
+  }
+  return null;
+}
+
+/** Persist only the fields present in the payload. */
+function writeProfile(b: Record<string, unknown>): void {
+  if (b.firstName !== undefined) setSetting('profile_first_name', String(b.firstName).trim());
+  if (b.lastName !== undefined) setSetting('profile_last_name', String(b.lastName).trim());
+  if (b.birthDate !== undefined) setSetting('profile_birth_date', String(b.birthDate));
+  if (b.sex !== undefined) setSetting('profile_sex', String(b.sex));
 }
 
 app.get('/api/profile', (_req, res) => {
@@ -235,12 +283,13 @@ app.get('/api/profile', (_req, res) => {
 });
 
 app.put('/api/profile', (req, res) => {
-  const b = req.body ?? {};
-  if (b.sex !== undefined && b.sex !== 'male' && b.sex !== 'female') {
-    res.status(400).json({ error: "sex must be 'male' or 'female'" });
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const problem = profileProblem(b);
+  if (problem) {
+    res.status(400).json({ error: problem });
     return;
   }
-  if (b.sex !== undefined) setSetting('profile_sex', b.sex);
+  writeProfile(b);
   res.json(readProfile());
 });
 
@@ -636,5 +685,12 @@ app.get(/^\/(?!api\/).*/, (_req, res) => {
 
 const port = Number(process.env.PORT ?? 3101);
 app.listen(port, () => {
+  // the schema is created on first import of db.ts, so by now the file exists
   console.log(`[vitals-hub] API + static server → http://localhost:${port}`);
+  console.log(`[vitals-hub] data directory     → ${DATA_DIR}`);
+  console.log(
+    isConfigured()
+      ? '[vitals-hub] account ready — sign in to continue'
+      : '[vitals-hub] first run: open the app and create the owner account',
+  );
 });

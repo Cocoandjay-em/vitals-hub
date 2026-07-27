@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, Loader2, Settings, X, XCircle } from 'lucide-react'
-import { getConfig, getProfile, putConfig, putProfile, testConfig, type AiConfigPublic, type Profile } from '@/lib/api'
+import { getConfig, putConfig, testConfig, type AiConfigPublic } from '@/lib/api'
 
 interface SettingsModalProps {
   open: boolean
   onClose: () => void
   /** notify the parent when hasKey changes (extraction mode switches) */
   onConfigChange?: (cfg: AiConfigPublic) => void
-  /** notify the parent when the profile body model changes */
-  onProfileChange?: (profile: Profile) => void
 }
 
 type TestState =
@@ -22,12 +20,11 @@ type TestState =
  * Values are stored server-side in the SQLite settings table; the key is
  * never returned by the API after being saved.
  */
-export function SettingsModal({ open, onClose, onConfigChange, onProfileChange }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, onConfigChange }: SettingsModalProps) {
   const [baseUrl, setBaseUrl] = useState('')
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
-  const [sex, setSex] = useState<Profile['sex']>('male')
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
@@ -45,24 +42,7 @@ export function SettingsModal({ open, onClose, onConfigChange, onProfileChange }
         setHasKey(cfg.hasKey)
       })
       .catch(() => setNotice('⚠ Backend unreachable — start it with npm run dev.'))
-    getProfile()
-      .then((p) => setSex(p.sex))
-      .catch(() => undefined)
   }, [open])
-
-  /** pick the body model used by the 3D scan — saved immediately (profile, not a view toggle) */
-  const handleSexChange = useCallback(
-    async (next: Profile['sex']) => {
-      setSex(next)
-      try {
-        const p = await putProfile({ sex: next })
-        onProfileChange?.(p)
-      } catch {
-        setNotice('⚠ Could not save profile — backend offline?')
-      }
-    },
-    [onProfileChange],
-  )
 
   const apply = useCallback(
     (cfg: AiConfigPublic) => {
@@ -144,31 +124,7 @@ export function SettingsModal({ open, onClose, onConfigChange, onProfileChange }
         </div>
 
         <div className="flex flex-col gap-4 px-4 py-4">
-          <div className="flex flex-col gap-1">
-            <span className="hud-label">Profile · body model</span>
-            <div className="flex gap-2">
-              {(['male', 'female'] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => void handleSexChange(s)}
-                  className={`hud-mono flex-1 rounded-sm border px-2 py-1.5 text-[10px] tracking-[0.18em] transition ${
-                    sex === s
-                      ? 'border-cyan-300/70 bg-cyan-400/15 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.25)]'
-                      : 'border-cyan-400/20 text-cyan-100/40 hover:bg-cyan-400/5'
-                  }`}
-                >
-                  {s === 'male' ? '♂ MALE' : '♀ FEMALE'}
-                </button>
-              ))}
-            </div>
-            <span className="text-[10px] text-cyan-100/35">
-              Which Visible Human body the 3D scan shows — saved to your profile.
-            </span>
-          </div>
-
-          <div className="border-t border-cyan-400/10 pt-1">
-            <span className="hud-label">AI extraction</span>
-          </div>
+          <span className="hud-label">AI extraction</span>
 
           <p className="text-[11px] leading-relaxed text-cyan-100/60">
             With an API key, lab reports are read by a vision model on an OpenAI-compatible

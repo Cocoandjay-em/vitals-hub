@@ -53,15 +53,60 @@ npm run dev
 Open <http://localhost:3000>. Two processes start together: the Vite dev server
 on port 3000 (proxying `/api`) and the Express backend on port 3101.
 
-The first screen asks you to **create the owner account**. There is no default
-password — the account does not exist until you make it. After that, the same
-username and password unlock a 30-day session.
-
 To pass Vite arguments through:
 
 ```bash
 npm run dev -- --port 7100 --host
 ```
+
+### What happens on first run
+
+You do not create or migrate a database by hand. On the very first start the
+backend creates `DATA_DIR` (default `server/data`), creates `biomarkers.db`,
+and applies the whole schema — `tests`, `biomarkers`, `reports`, `users`,
+`sessions`, `settings` — before the server accepts a request. Every later start
+reuses the same file, and new tables are added with `CREATE TABLE IF NOT EXISTS`,
+so upgrading is just pulling new code and restarting. The startup log tells you
+exactly where the data went:
+
+```
+[vitals-hub] API + static server → http://localhost:3101
+[vitals-hub] data directory     → /srv/vitals-hub/server/data
+[vitals-hub] first run: open the app and create the owner account
+```
+
+The first page you see asks you to **create the owner account** — username,
+password, and optionally your name, date of birth and which body model the 3D
+scan should render. There is no default password: the account does not exist
+until you make it, and once it does, `/api/auth/setup` refuses to run again.
+Signing in issues a 30-day session.
+
+## Using it
+
+**Add a lab report.** Click **SCAN LAB**, drop in a PDF or photo, wait for the
+rows to be extracted, check them, then **ADD TO HISTORY**. Nothing is stored
+until you confirm. The test date is editable if it was misread, and rows with no
+printed reference range are flagged so you can spot extraction gaps.
+
+**Add a specialist report.** Click **CLINICAL REPORT** for a document with no lab
+values — a neurology letter, a radiology report. The AI proposes the visit date,
+the organ it belongs to and a criticality stage, quoting the wording that
+justifies it. Adjust anything, then **ATTACH TO BODY MAP**. The organ lights up
+in the stage colour, and the original document stays downloadable from the organ
+card.
+
+**Explore.** Click any organ on the scan for its markers, its reports and a
+plain-language explanation. Click a marker for its trend over time. **RESULTS**
+opens the full table with per-value explanations and **AI ANALYSIS** summarises
+the whole panel.
+
+**Track vitals.** **MANUAL +** records weight, blood pressure, heart rate or
+temperature in one tap. **APPLE HEALTH** imports an iPhone Health export
+(`export.zip`).
+
+**Manage your account.** **ACCOUNT** holds your name, date of birth (the header
+shows your age), the body model, and the password change form. **AI KEY** holds
+the AI endpoint settings. Sign out from the badge in the bottom-right corner.
 
 ## Run it as a single process
 
@@ -180,9 +225,14 @@ and can be imported into another instance.
 - Every `/api` route requires a session except `/api/health` and the auth
   endpoints.
 
-This is a single-account personal deployment. It has no password reset (change
-it while signed in, or delete the row in the `users` table to start over) and no
-multi-user sharing.
+This is a single-account personal deployment. It has no password reset and no
+multi-user sharing. Change your password under **ACCOUNT** while signed in. If
+you are ever locked out, clear the account and start the first-run flow again —
+your health data is untouched:
+
+```bash
+sqlite3 "$DATA_DIR/biomarkers.db" "DELETE FROM sessions; DELETE FROM users;"
+```
 
 ## AI setup
 
@@ -234,6 +284,7 @@ requires a session cookie.
 | `GET /api/history` | all tests + biomarkers |
 | `POST /api/tests` | create or merge a test by date |
 | `DELETE /api/markers/:id` · `/api/tests/:id` · `/api/history` | delete one marker, one test, or everything |
+| `GET` / `PUT /api/profile` | name, date of birth and body model |
 | `GET` / `PUT /api/config` | AI settings (the key is never returned) |
 | `GET /api/config/test` | connectivity check against the provider |
 | `POST /api/extract` | vision extraction of lab pages |

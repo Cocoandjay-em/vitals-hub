@@ -97,6 +97,10 @@ function AuthForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: () => voi
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [birthDate, setBirthDate] = useState('')
+  const [sex, setSex] = useState<'male' | 'female'>('male')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const isSetup = mode === 'setup'
@@ -110,8 +114,14 @@ function AuthForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: () => voi
     }
     setBusy(true)
     try {
-      if (isSetup) await api.setupAccount(username.trim(), password)
-      else await api.login(username.trim(), password)
+      if (isSetup) {
+        await api.setupAccount(username.trim(), password, {
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          birthDate,
+          sex,
+        })
+      } else await api.login(username.trim(), password)
       setPassword('')
       setConfirm('')
       onDone()
@@ -168,19 +178,81 @@ function AuthForm({ mode, onDone }: { mode: 'setup' | 'login'; onDone: () => voi
         </label>
 
         {isSetup && (
-          <label className="mb-3 flex flex-col gap-1">
-            <span className="hud-mono text-[9px] tracking-[0.18em] text-cyan-100/45">
-              CONFIRM PASSWORD
-            </span>
-            <input
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              autoComplete="new-password"
-              required
-              className="hud-mono rounded-sm border border-cyan-400/25 bg-[#01040c] px-2 py-1.5 text-[12px] text-cyan-100 outline-none focus:border-cyan-400/60"
-            />
-          </label>
+          <>
+            <label className="mb-3 flex flex-col gap-1">
+              <span className="hud-mono text-[9px] tracking-[0.18em] text-cyan-100/45">
+                CONFIRM PASSWORD
+              </span>
+              <input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
+                required
+                className="hud-mono rounded-sm border border-cyan-400/25 bg-[#01040c] px-2 py-1.5 text-[12px] text-cyan-100 outline-none focus:border-cyan-400/60"
+              />
+            </label>
+
+            {/* profile — optional here, editable later under ACCOUNT */}
+            <div className="mb-3 border-t border-cyan-400/15 pt-3">
+              <p className="hud-mono mb-2 text-[9px] tracking-[0.18em] text-cyan-100/45">
+                YOUR PROFILE <span className="text-cyan-100/25">· OPTIONAL</span>
+              </p>
+
+              <div className="mb-2 grid grid-cols-2 gap-2">
+                <input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="First name"
+                  autoComplete="given-name"
+                  className="hud-mono rounded-sm border border-cyan-400/25 bg-[#01040c] px-2 py-1.5 text-[12px] text-cyan-100 outline-none placeholder:text-cyan-100/25 focus:border-cyan-400/60"
+                />
+                <input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Last name"
+                  autoComplete="family-name"
+                  className="hud-mono rounded-sm border border-cyan-400/25 bg-[#01040c] px-2 py-1.5 text-[12px] text-cyan-100 outline-none placeholder:text-cyan-100/25 focus:border-cyan-400/60"
+                />
+              </div>
+
+              <label className="mb-2 flex flex-col gap-1">
+                <span className="hud-mono text-[9px] tracking-[0.18em] text-cyan-100/45">
+                  DATE OF BIRTH
+                </span>
+                <input
+                  type="date"
+                  value={birthDate}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  className="hud-mono rounded-sm border border-cyan-400/25 bg-[#01040c] px-2 py-1.5 text-[12px] text-cyan-100 outline-none focus:border-cyan-400/60"
+                />
+              </label>
+
+              <span className="hud-mono text-[9px] tracking-[0.18em] text-cyan-100/45">
+                BODY MODEL
+              </span>
+              <div className="mt-1 flex gap-2">
+                {(['male', 'female'] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSex(s)}
+                    className={`hud-mono flex-1 rounded-sm border px-2 py-1.5 text-[10px] tracking-[0.18em] transition ${
+                      sex === s
+                        ? 'border-cyan-300/70 bg-cyan-400/15 text-cyan-100'
+                        : 'border-cyan-400/20 text-cyan-100/40 hover:bg-cyan-400/5'
+                    }`}
+                  >
+                    {s === 'male' ? '♂ MALE' : '♀ FEMALE'}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[9px] leading-relaxed text-cyan-100/30">
+                Picks which anatomy the 3D scan renders.
+              </p>
+            </div>
+          </>
         )}
 
         {error && (
