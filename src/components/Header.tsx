@@ -25,7 +25,7 @@ export function Header({ latest }: HeaderProps) {
           </div>
           <div>
             <h1 className="hud-mono text-xl font-bold tracking-[0.22em] text-cyan-200 hud-glow-cyan">
-              VITALS&nbsp;HUD
+              VITALS&nbsp;HUB
             </h1>
             <p className="hud-label mt-0.5">Blood biomarker dashboard · local-first</p>
           </div>
