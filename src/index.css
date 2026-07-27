@@ -1,0 +1,316 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+/* ================= VITALS HUD — futuristic medical theme ================= */
+
+:root {
+  --hud-cyan: #22d3ee;
+  --hud-cyan-hot: #00e5ff;
+  --hud-magenta: #e879f9;
+  --hud-high: #f43f5e;
+  --hud-low: #f59e0b;
+  --hud-normal: #34d399;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 70% -10%, rgba(34, 211, 238, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(232, 121, 249, 0.05), transparent 60%),
+    linear-gradient(180deg, #020817 0%, #04122b 55%, #020817 100%);
+  min-height: 100vh;
+  color: #dbeafe;
+}
+
+/* faint background grid + scanlines */
+.hud-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 90%);
+  z-index: 0;
+}
+
+.hud-bg::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.014) 0px,
+    rgba(255, 255, 255, 0.014) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  z-index: 0;
+}
+
+/* small-caps technical label */
+.hud-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(103, 232, 249, 0.75);
+}
+
+.hud-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+/* translucent panel with luminous border + soft glow */
+.hud-panel {
+  position: relative;
+  background: rgba(4, 18, 43, 0.62);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  box-shadow:
+    0 0 24px rgba(34, 211, 238, 0.07),
+    inset 0 0 32px rgba(34, 211, 238, 0.03);
+  backdrop-filter: blur(6px);
+}
+
+/* corner brackets (targeting reticle) */
+.hud-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  border-color: rgba(34, 211, 238, 0.65);
+  border-style: solid;
+  filter: drop-shadow(0 0 4px rgba(34, 211, 238, 0.5));
+}
+.hud-corner-tl { top: -1px; left: -1px; border-width: 1.5px 0 0 1.5px; }
+.hud-corner-tr { top: -1px; right: -1px; border-width: 1.5px 1.5px 0 0; }
+.hud-corner-bl { bottom: -1px; left: -1px; border-width: 0 0 1.5px 1.5px; }
+.hud-corner-br { bottom: -1px; right: -1px; border-width: 0 1.5px 1.5px 0; }
+
+/* glow accents */
+.hud-glow-cyan { text-shadow: 0 0 12px rgba(34, 211, 238, 0.55); }
+.hud-glow-high { text-shadow: 0 0 12px rgba(244, 63, 94, 0.6); }
+.hud-glow-low { text-shadow: 0 0 12px rgba(245, 158, 11, 0.6); }
+.hud-glow-normal { text-shadow: 0 0 12px rgba(52, 211, 153, 0.55); }
+
+/* ECG trace animation */
+.ecg-trace {
+  stroke-dasharray: 340 900;
+  animation: ecg-run 6s linear infinite;
+}
+@keyframes ecg-run {
+  from { stroke-dashoffset: 1240; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* scan sweep across header */
+.hud-scan {
+  animation: hud-scan 7s ease-in-out infinite;
+}
+@keyframes hud-scan {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+
+/* subtle blinking status dot */
+.hud-blink {
+  animation: hud-blink 2.2s ease-in-out infinite;
+}
+@keyframes hud-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ecg-trace, .hud-scan, .hud-blink {
+    animation: none !important;
+  }
+}
+
+/* thin scrollbar for panels */
+.hud-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.hud-scroll::-webkit-scrollbar-track { background: rgba(34, 211, 238, 0.05); }
+.hud-scroll::-webkit-scrollbar-thumb { background: rgba(34, 211, 238, 0.25); border-radius: 3px; }
+
+/* clickable table row */
+.hud-row {
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+  cursor: pointer;
+}
+.hud-row:hover {
+  background: rgba(34, 211, 238, 0.06);
+}
+.hud-row-selected {
+  background: rgba(34, 211, 238, 0.1) !important;
+  box-shadow: inset 2px 0 0 var(--hud-cyan);
+}
+
+/* dropzone armed state */
+.hud-dropzone-armed {
+  border-color: rgba(0, 229, 255, 0.8) !important;
+  box-shadow: 0 0 32px rgba(0, 229, 255, 0.25), inset 0 0 40px rgba(0, 229, 255, 0.06) !important;
+}
+
+/* ---- body hologram animations ---- */
+
+/* slow vertical breathing float */
+.hud-float {
+  animation: hud-float 7s ease-in-out infinite;
+}
+@keyframes hud-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+/* horizontal scanline sweep passing over the body */
+.hud-scanline {
+  top: -12%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(0, 229, 255, 0.05) 30%,
+    rgba(0, 229, 255, 0.22) 50%,
+    rgba(0, 229, 255, 0.05) 70%,
+    transparent
+  );
+  border-top: 1px solid rgba(0, 229, 255, 0.35);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.12);
+  mix-blend-mode: screen;
+  animation: hud-scanline 5.5s linear infinite;
+}
+@keyframes hud-scanline {
+  0% { transform: translateY(0); opacity: 0; }
+  8% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(1250%); opacity: 0; }
+}
+
+/* pulsing hotspot ring */
+.hud-ping {
+  animation: hud-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes hud-ping {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  70% { transform: scale(2.6); opacity: 0; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+
+/* slow breathing pulse for organ glow overlays */
+.hud-organ-pulse {
+  animation: hud-organ-pulse 4.5s ease-in-out infinite;
+}
+@keyframes hud-organ-pulse {
+  0%, 100% { opacity: var(--glow-lo, 0.45); transform: scale(1); }
+  50% { opacity: var(--glow-hi, 0.8); transform: scale(1.05); }
+}
+
+/* staggered fade-in when fresh data arrives (opacity only — no transform
+   conflict with the positioning/pulse transforms) */
+.hud-glow-in {
+  animation: hud-glow-in 650ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@keyframes hud-glow-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* smooth zoom-to-organ travel on the hologram wrapper */
+.hud-zoom {
+  transition: transform 540ms cubic-bezier(0.22, 0.9, 0.28, 1);
+  will-change: transform;
+}
+
+/* slow reticle rotation */
+.hud-spin-slow {
+  animation: hud-spin 46s linear infinite;
+}
+.hud-spin-rev {
+  animation: hud-spin 34s linear infinite reverse;
+}
+@keyframes hud-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-float, .hud-scanline, .hud-ping, .hud-spin-slow, .hud-spin-rev, .hud-organ-pulse, .hud-glow-in {
+    animation: none !important;
+  }
+  .hud-zoom {
+    transition: none !important; /* instant jump, no travel animation */
+  }
+}
