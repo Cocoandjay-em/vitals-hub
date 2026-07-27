@@ -330,4 +330,11 @@ read day-first.
 ## Credits and licence
 
 Anatomical models from the [HuBMAP CCF 3D Reference Object Library](https://humanatlas.io/)
-(CC BY 4.0). Released under the MIT licence — see [LICENSE](LICENSE).
+(CC BY 4.0). **Modified**: the meshes derive from real cadaver scans, so each
+body carried its donor's build and the organs — coming from separate scans —
+were not in proportion with the body around them. `scripts/reshape-anatomy.mjs`
+narrows the torso along an anatomical profile and rescales each organ to an
+adult reference dimension about its own centre; `scripts/resize-lungs.mjs`
+re-inflates the collapsed donor lungs. Both are re-runnable and documented.
+
+Released under the MIT licence — see [LICENSE](LICENSE).
