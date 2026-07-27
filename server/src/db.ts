@@ -1,10 +1,18 @@
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = join(__dirname, '..', 'data')
+
+/**
+ * Where the database and stored report documents live. Override with DATA_DIR
+ * to keep state outside the checkout — a mounted volume, /var/lib/..., or a
+ * throwaway directory in tests.
+ */
+export const DATA_DIR = process.env.DATA_DIR
+  ? resolve(process.env.DATA_DIR)
+  : join(__dirname, '..', 'data')
 mkdirSync(DATA_DIR, { recursive: true })
 
 export const db = new Database(join(DATA_DIR, 'biomarkers.db'))
@@ -53,6 +61,19 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS reports_region_idx ON reports(region);
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
 `)
 
 /* ------------------------------- types ------------------------------- */
@@ -391,6 +412,88 @@ export function getReportFile(id: string): { filePath: string; mime: string | nu
     | undefined
   if (!row?.file_path) return null
   return { filePath: row.file_path, mime: row.mime, fileName: row.file_name }
+}
+
+/* --------------------------- users & sessions --------------------------- */
+
+export interface UserRow {
+  id: string
+  username: string
+  passwordHash: string
+  createdAt: string
+}
+
+interface UserDbRow {
+  id: string
+  username: string
+  password_hash: string
+  created_at: string
+}
+
+function mapUser(r: UserDbRow): UserRow {
+  return { id: r.id, username: r.username, passwordHash: r.password_hash, createdAt: r.created_at }
+}
+
+export function countUsers(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n
+}
+
+export function createUser(id: string, username: string, passwordHash: string): void {
+  db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)').run(
+    id,
+    username,
+    passwordHash,
+    new Date().toISOString(),
+  )
+}
+
+export function findUserByName(username: string): UserRow | null {
+  const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserDbRow | undefined
+  return row ? mapUser(row) : null
+}
+
+export function getUserById(id: string): UserRow | null {
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserDbRow | undefined
+  return row ? mapUser(row) : null
+}
+
+export function updateUserPassword(id: string, passwordHash: string): void {
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id)
+}
+
+export function createSession(tokenHash: string, userId: string, expiresAt: string): void {
+  db.prepare(
+    'INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
+  ).run(tokenHash, userId, expiresAt, new Date().toISOString())
+}
+
+/**
+ * Look up a live session and slide its expiry forward. Returns null for an
+ * unknown or expired token, so an expired row can never authenticate.
+ */
+export function touchSession(tokenHash: string, newExpiry: string): { userId: string } | null {
+  const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?').get(tokenHash) as
+    | { user_id: string; expires_at: string }
+    | undefined
+  if (!row) return null
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash)
+    return null
+  }
+  db.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?').run(newExpiry, tokenHash)
+  return { userId: row.user_id }
+}
+
+export function deleteSession(tokenHash: string): void {
+  db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash)
+}
+
+export function deleteSessionsForUser(userId: string): void {
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
+}
+
+export function purgeExpiredSessions(): void {
+  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString())
 }
 
 /* ------------------------------ settings ------------------------------ */

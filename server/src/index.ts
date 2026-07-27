@@ -20,6 +20,7 @@ import express from 'express';
 import {
   clearHistory,
   deleteMarker,
+  DATA_DIR,
   deleteReport,
   deleteTest,
   getHistory,
@@ -41,9 +42,109 @@ import {
   testConnection,
   updateConfig,
 } from './ai.js';
+import {
+  authenticate,
+  changePassword,
+  clearFailures,
+  clearSession,
+  currentUser,
+  isConfigured,
+  issueSession,
+  lockoutRemainingMs,
+  passwordProblem,
+  recordFailure,
+  requireAuth,
+  setupFirstUser,
+  startSessionCleanup,
+  usernameProblem,
+} from './auth.js';
 
 const app = express();
+// Caddy/nginx terminate TLS in front of us: trust one proxy hop so req.ip is
+// the real client (login throttling) and req.secure reflects the outer scheme.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '60mb' })); // rasterized PDF pages are chunky
+
+// every /api route below requires a session, except the public ones listed in auth.ts
+app.use('/api', requireAuth);
+startSessionCleanup();
+
+// ---------- authentication ----------
+
+app.get('/api/auth/status', (req, res) => {
+  const user = currentUser(req);
+  res.json({
+    configured: isConfigured(),
+    authenticated: !!user,
+    username: user?.username ?? null,
+  });
+});
+
+/** First run only: create the single owner account. */
+app.post('/api/auth/setup', (req, res) => {
+  const username = String(req.body?.username ?? '').trim();
+  const password = String(req.body?.password ?? '');
+  const problem = usernameProblem(username) ?? passwordProblem(password);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  try {
+    const user = setupFirstUser(username, password);
+    issueSession(req, res, user.id);
+    res.json({ username: user.username });
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    res.status(e.code === 'ALREADY_CONFIGURED' ? 409 : 500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const waitMs = lockoutRemainingMs(req);
+  if (waitMs > 0) {
+    res
+      .status(429)
+      .json({ error: `Too many failed attempts. Try again in ${Math.ceil(waitMs / 60000)} minutes.` });
+    return;
+  }
+  const username = String(req.body?.username ?? '').trim();
+  const password = String(req.body?.password ?? '');
+  const user = authenticate(username, password);
+  if (!user) {
+    recordFailure(req);
+    // deliberately vague: never reveal whether the username exists
+    res.status(401).json({ error: 'Invalid username or password.' });
+    return;
+  }
+  clearFailures(req);
+  issueSession(req, res, user.id);
+  res.json({ username: user.username });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearSession(req, res);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/password', (req, res) => {
+  const user = currentUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHENTICATED' });
+    return;
+  }
+  const problem = changePassword(
+    user.id,
+    String(req.body?.currentPassword ?? ''),
+    String(req.body?.newPassword ?? ''),
+  );
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  // every session was invalidated, including this one — issue a fresh one
+  issueSession(req, res, user.id);
+  res.json({ ok: true });
+});
 
 // ---------- helpers ----------
 
@@ -368,7 +469,7 @@ app.post('/api/import/apple-health', (req, res) => {
 
 const REPORT_REGIONS = ['brain', 'neck', 'heart', 'lungs', 'liver', 'gut', 'kidney', 'systemic'];
 const REPORT_STAGES = ['normal', 'mild', 'moderate', 'severe', 'critical', 'unknown'];
-const REPORTS_DIR = path.resolve(__dirname, '../data/reports');
+const REPORTS_DIR = path.join(DATA_DIR, 'reports');
 const MAX_REPORT_FILE_BYTES = 25 * 1024 * 1024;
 
 /** Extension whitelist — the stored name is derived from the report id, never from user input. */

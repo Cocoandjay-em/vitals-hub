@@ -51,6 +51,9 @@ export interface AiFileResult {
   error?: string
 }
 
+/** Fired whenever any API call is rejected for a missing/expired session. */
+export const UNAUTHENTICATED_EVENT = 'vitals-hub:unauthenticated'
+
 export class ApiError extends Error {
   code?: string
   status: number
@@ -78,6 +81,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* keep default message */
     }
+    // an expired or revoked session must drop the whole app back to the login
+    // screen, wherever the call was made from
+    if (res.status === 401 && code === 'UNAUTHENTICATED') {
+      window.dispatchEvent(new CustomEvent(UNAUTHENTICATED_EVENT))
+    }
     throw new ApiError(message, res.status, code)
   }
   return (await res.json()) as T
@@ -88,6 +96,35 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 })
+
+/* ----------------------------- authentication ---------------------------- */
+
+export interface AuthStatus {
+  /** false on a fresh install — the UI shows the create-account screen */
+  configured: boolean
+  authenticated: boolean
+  username: string | null
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>('/api/auth/status')
+}
+
+export async function setupAccount(username: string, password: string): Promise<{ username: string }> {
+  return request<{ username: string }>('/api/auth/setup', jsonInit('POST', { username, password }))
+}
+
+export async function login(username: string, password: string): Promise<{ username: string }> {
+  return request<{ username: string }>('/api/auth/login', jsonInit('POST', { username, password }))
+}
+
+export async function logout(): Promise<void> {
+  await request('/api/auth/logout', { method: 'POST' })
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await request('/api/auth/password', jsonInit('POST', { currentPassword, newPassword }))
+}
 
 /* -------------------------------- history -------------------------------- */
 
