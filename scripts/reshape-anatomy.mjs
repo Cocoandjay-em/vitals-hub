@@ -111,9 +111,9 @@ const BODY_PROFILE = {
     { y: 0.08, sx: 0.97, sz: 0.95 },
     { y: 0.28, sx: 0.93, sz: 0.91 },
     { y: 0.46, sx: 0.9, sz: 0.86 },
-    { y: 0.54, sx: 0.92, sz: 0.83 },
-    { y: 0.62, sx: 0.86, sz: 0.75 },
-    { y: 0.7, sx: 0.92, sz: 0.81 },
+    { y: 0.54, sx: 0.92, sz: 0.88 },
+    { y: 0.62, sx: 0.86, sz: 0.86 }, // depth kept: the bowel has to fit
+    { y: 0.7, sx: 0.92, sz: 0.88 },
     { y: 0.78, sx: 0.99, sz: 0.88 },
     { y: 0.86, sx: 0.97, sz: 0.92 },
     { y: 0.93, sx: 1.0, sz: 1.0 },
@@ -125,10 +125,10 @@ const BODY_PROFILE = {
     { y: 0.08, sx: 0.95, sz: 0.93 },
     { y: 0.28, sx: 0.85, sz: 0.85 }, // calves
     { y: 0.44, sx: 0.8, sz: 0.79 }, // thighs slimmed so the hips read as hips
-    { y: 0.53, sx: 0.97, sz: 0.87 }, // hips: widest point below the waist
-    { y: 0.62, sx: 0.72, sz: 0.64 }, // waist: the tightest point, flat belly
-    { y: 0.68, sx: 0.79, sz: 0.71 },
-    { y: 0.74, sx: 0.88, sz: 0.83 }, // bust line
+    { y: 0.53, sx: 0.97, sz: 0.9 }, // hips: widest point below the waist
+    { y: 0.62, sx: 0.72, sz: 0.85 }, // waist: narrow from the front, but the
+    { y: 0.68, sx: 0.79, sz: 0.86 }, // abdomen keeps the depth the bowel needs
+    { y: 0.74, sx: 0.88, sz: 0.88 }, // bust line
     { y: 0.8, sx: 0.87, sz: 0.85 }, // shoulders stay narrow
     { y: 0.86, sx: 0.9, sz: 0.9 },
     { y: 0.93, sx: 1.0, sz: 1.0 },
@@ -142,7 +142,7 @@ const BODY_PROFILE = {
  * is full and round rather than the flat cadaver silhouette.
  */
 const BUST = {
-  female: { t: 0.752, offsetX: 0.068, radius: 0.094, push: 0.078, lift: 0.014 },
+  female: { t: 0.748, offsetX: 0.07, radius: 0.108, push: 0.03, lift: 0.006 },
 }
 
 function sampleProfile(profile, t) {
@@ -224,6 +224,42 @@ async function reshapeBody(path, sex) {
   return { height, vertices: count }
 }
 
+/**
+ * Apply the body's own narrowing profile to a mesh that lives inside it.
+ *
+ * Without this the torso shrinks but the viscera do not, and the bowel ends up
+ * poking through the abdominal wall — in the source data the male gut already
+ * sat 1.5 cm proud of the skin, and taking the waist in made it worse. Running
+ * the identical profile over the organs keeps every organ exactly as deep
+ * inside the body as the anatomists placed it.
+ */
+async function conformToBody(path, sex, frame) {
+  const { doc, prims } = await loadGeometry(path)
+  const profile = BODY_PROFILE[sex]
+  const halfSpan = (frame.max[0] - frame.min[0]) / 2
+  const torsoHalf = halfSpan * 0.34
+  const armStart = halfSpan * 0.56
+  const cx = (frame.min[0] + frame.max[0]) / 2
+  const cz = (frame.min[2] + frame.max[2]) / 2
+  const height = frame.max[1] - frame.min[1]
+
+  for (const prim of prims) {
+    const pos = prim.getAttribute('POSITION')
+    const arr = pos.getArray()
+    for (let i = 0; i < arr.length; i += 3) {
+      const t = (arr[i + 1] - frame.min[1]) / height
+      const { sx, sz } = sampleProfile(profile, t)
+      const dx = arr[i] - cx
+      const w = torsoFalloff(dx, torsoHalf, armStart)
+      arr[i] = cx + dx * (1 + (sx - 1) * w)
+      arr[i + 2] = cz + (arr[i + 2] - cz) * sz
+    }
+    pos.setArray(arr)
+    recomputeNormals(prim)
+  }
+  if (!DRY) await io.write(path, doc)
+}
+
 /* ------------------------------- organs -------------------------------- */
 
 /** Longest-axis size in metres for a 1.80 m adult, scaled per body height. */
@@ -297,6 +333,9 @@ async function fixOrgan(path, { sizeTarget, shrinkOnly, band, alignTop, stature,
 for (const sex of ['male', 'female']) {
   const dir = `public/models/anatomy/${sex}`
 
+  // frame of the body BEFORE reshaping — organs must follow the same transform
+  const frame = await loadGeometry(`${dir}/skin.glb`)
+
   if (BODIES.includes(sex)) {
     const r = await reshapeBody(`${dir}/skin.glb`, sex)
     console.log(`\n=== ${sex} body === ${r.height.toFixed(2)} m · ${r.vertices.toLocaleString()} vertices reshaped`)
@@ -324,6 +363,7 @@ for (const sex of ['male', 'female']) {
     const parts = []
     if (r.factor !== 1) parts.push(`×${r.factor.toFixed(2)}`)
     if (r.shift !== 0) parts.push(`${r.shift > 0 ? '↑' : '↓'}${Math.abs(r.shift * 100).toFixed(1)}cm`)
+    if (BODIES.includes(sex)) await conformToBody(`${dir}/${organ}.glb`, sex, frame)
     console.log(`  ${organ.padEnd(10)} ${parts.join(' ').padEnd(16)} top now ${top} of stature`)
   }
 }
