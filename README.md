@@ -353,9 +353,9 @@ Ideas, pull requests and better meshes are all welcome:
   crude.
 - More organs: thyroid, pancreas, spleen, bladder, and a real diaphragm.
 
-Open an issue or a PR. If you change the meshes, re-run
-`node scripts/reshape-anatomy.mjs --dry` and include the before/after numbers,
-and remember the body pass is not idempotent — start from pristine meshes.
+Open an issue or a PR — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
+checks a PR has to pass, and the gotchas around regenerating the meshes (the
+body pass is not idempotent, so start from pristine meshes).
 
 ## Limitations
 
