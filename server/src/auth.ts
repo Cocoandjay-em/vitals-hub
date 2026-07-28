@@ -7,8 +7,10 @@ import {
   deleteSession,
   deleteSessionsForUser,
   findUserByName,
+  getActiveSubjectId,
   getUserById,
   purgeExpiredSessions,
+  setActiveSubjectId,
   touchSession,
   updateUserPassword,
 } from './db.js'
@@ -122,6 +124,21 @@ export function currentUser(req: Request): AuthUser | null {
 /** Whether an account exists yet — drives the first-run setup screen. */
 export function isConfigured(): boolean {
   return countUsers() > 0
+}
+
+/**
+ * Which person this session is currently viewing. One login can track several
+ * people, and the choice lives on the session so it survives a reload without
+ * the client having to pass it on every call.
+ */
+export function currentSubjectId(req: Request): string {
+  const token = readCookie(req, SESSION_COOKIE)
+  return getActiveSubjectId(token ? tokenDigest(token) : '')
+}
+
+export function switchSubject(req: Request, subjectId: string): void {
+  const token = readCookie(req, SESSION_COOKIE)
+  if (token) setActiveSubjectId(tokenDigest(token), subjectId)
 }
 
 /* --------------------------- login throttling --------------------------- */

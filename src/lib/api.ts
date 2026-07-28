@@ -133,6 +133,46 @@ export async function changePassword(currentPassword: string, newPassword: strin
   await request('/api/auth/password', jsonInit('POST', { currentPassword, newPassword }))
 }
 
+/* -------------------------------- people --------------------------------- */
+
+/**
+ * A person tracked under this login — you, a partner, a child. All health data
+ * belongs to a subject, and the dashboard shows whichever one is active.
+ */
+export interface Subject {
+  id: string
+  firstName: string
+  lastName: string
+  /** ISO yyyy-mm-dd, empty when not set */
+  birthDate: string
+  sex: 'male' | 'female'
+}
+
+export function subjectLabel(s: Subject): string {
+  return [s.firstName, s.lastName].filter(Boolean).join(' ').trim() || 'Unnamed'
+}
+
+export async function getSubjects(): Promise<{ subjects: Subject[]; activeId: string }> {
+  return request<{ subjects: Subject[]; activeId: string }>('/api/subjects')
+}
+
+export async function createSubject(input: Partial<Subject>): Promise<Subject> {
+  return request<Subject>('/api/subjects', jsonInit('POST', input))
+}
+
+export async function updateSubject(id: string, input: Partial<Subject>): Promise<Subject> {
+  return request<Subject>(`/api/subjects/${id}`, jsonInit('PATCH', input))
+}
+
+export async function deleteSubject(id: string): Promise<void> {
+  await request(`/api/subjects/${id}`, { method: 'DELETE' })
+}
+
+/** Switch the dashboard to another person. */
+export async function activateSubject(id: string): Promise<void> {
+  await request(`/api/subjects/${id}/activate`, { method: 'POST' })
+}
+
 /* -------------------------------- history -------------------------------- */
 
 /** Assemble TestRecord[] from the flat {tests, biomarkers} payload. */

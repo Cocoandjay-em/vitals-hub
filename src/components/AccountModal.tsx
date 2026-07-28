@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Loader2, UserRound, X } from 'lucide-react'
-import { ageFromBirthDate, changePassword, getProfile, putProfile, type Profile } from '@/lib/api'
+import { KeyRound, Loader2, UserPlus, UserRound, UsersRound, X } from 'lucide-react'
+import {
+  ageFromBirthDate,
+  changePassword,
+  createSubject,
+  deleteSubject,
+  getProfile,
+  putProfile,
+  subjectLabel,
+  type Profile,
+  type Subject,
+} from '@/lib/api'
 
 interface AccountModalProps {
   open: boolean
@@ -9,6 +19,12 @@ interface AccountModalProps {
   username: string
   /** lets the dashboard swap the 3D body model as soon as the profile changes */
   onProfileChange?: (profile: Profile) => void
+  /** everyone tracked under this login */
+  subjects?: Subject[]
+  activeSubjectId?: string
+  onSwitchSubject?: (id: string) => void | Promise<void>
+  /** the list changed — the dashboard should reload it */
+  onPeopleChanged?: () => void | Promise<void>
 }
 
 const EMPTY: Profile = { firstName: '', lastName: '', birthDate: '', sex: 'male' }
@@ -18,10 +34,73 @@ const EMPTY: Profile = { firstName: '', lastName: '', birthDate: '', sex: 'male'
  * credentials you sign in with. The profile lives in the settings table, so
  * it travels with the database.
  */
-export function AccountModal({ open, onClose, username, onProfileChange }: AccountModalProps) {
+export function AccountModal({
+  open,
+  onClose,
+  username,
+  onProfileChange,
+  subjects = [],
+  activeSubjectId = '',
+  onSwitchSubject,
+  onPeopleChanged,
+}: AccountModalProps) {
   const [profile, setProfile] = useState<Profile>(EMPTY)
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileNotice, setProfileNotice] = useState('')
+
+  const [addingPerson, setAddingPerson] = useState(false)
+  const [savingPerson, setSavingPerson] = useState(false)
+  const [peopleNotice, setPeopleNotice] = useState('')
+  const [newFirst, setNewFirst] = useState('')
+  const [newLast, setNewLast] = useState('')
+  const [newBirth, setNewBirth] = useState('')
+  const [newSex, setNewSex] = useState<'male' | 'female'>('male')
+
+  const addPerson = useCallback(async () => {
+    setSavingPerson(true)
+    setPeopleNotice('')
+    try {
+      await createSubject({
+        firstName: newFirst.trim(),
+        lastName: newLast.trim(),
+        birthDate: newBirth,
+        sex: newSex,
+      })
+      setNewFirst('')
+      setNewLast('')
+      setNewBirth('')
+      setNewSex('male')
+      setAddingPerson(false)
+      await onPeopleChanged?.()
+      setPeopleNotice('✓ Person added')
+    } catch (err) {
+      setPeopleNotice(`⚠ ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSavingPerson(false)
+    }
+  }, [newFirst, newLast, newBirth, newSex, onPeopleChanged])
+
+  const removePerson = useCallback(
+    async (s: Subject) => {
+      const label = subjectLabel(s)
+      if (
+        !window.confirm(
+          `Remove ${label} and permanently delete every test, marker and report recorded for them? This cannot be undone.`,
+        )
+      ) {
+        return
+      }
+      setPeopleNotice('')
+      try {
+        await deleteSubject(s.id)
+        await onPeopleChanged?.()
+        setPeopleNotice(`✓ ${label} removed`)
+      } catch (err) {
+        setPeopleNotice(`⚠ ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+    [onPeopleChanged],
+  )
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -194,6 +273,122 @@ export function AccountModal({ open, onClose, username, onProfileChange }: Accou
             {savingProfile && <Loader2 className="h-3 w-3 animate-spin" />}
             SAVE PROFILE
           </button>
+        </div>
+
+        {/* ----------------------------- people ---------------------------- */}
+        <div className="flex flex-col gap-3 border-t border-cyan-400/15 px-4 py-4">
+          <span className="hud-label flex items-center gap-1.5">
+            <UsersRound className="h-3 w-3" /> People on this account
+          </span>
+          <p className="text-[10px] leading-relaxed text-cyan-100/35">
+            Each person keeps their own tests, reports and body scan. Anyone signed in with this
+            account can see all of them.
+          </p>
+
+          <div className="flex flex-col gap-1">
+            {subjects.map((s) => (
+              <div
+                key={s.id}
+                className={`flex items-center gap-2 rounded-sm border px-2 py-1.5 ${
+                  s.id === activeSubjectId ? 'border-cyan-300/50 bg-cyan-400/10' : 'border-cyan-400/15'
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate text-[12px] text-cyan-100">
+                  {subjectLabel(s)}
+                  {s.id === activeSubjectId && (
+                    <em className="hud-mono ml-1.5 not-italic text-[9px] tracking-wider text-cyan-300/70">
+                      · VIEWING
+                    </em>
+                  )}
+                </span>
+                {s.id !== activeSubjectId && (
+                  <button
+                    onClick={() => void onSwitchSubject?.(s.id)}
+                    className="hud-mono rounded-sm border border-cyan-400/25 px-1.5 py-0.5 text-[9px] tracking-wider text-cyan-200/80 transition hover:bg-cyan-400/10"
+                  >
+                    VIEW
+                  </button>
+                )}
+                {subjects.length > 1 && (
+                  <button
+                    onClick={() => void removePerson(s)}
+                    title="Remove this person and everything recorded about them"
+                    className="hud-mono rounded-sm border border-rose-400/30 px-1.5 py-0.5 text-[9px] tracking-wider text-rose-300/80 transition hover:bg-rose-400/10"
+                  >
+                    REMOVE
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {addingPerson ? (
+            <div className="flex flex-col gap-2 rounded-sm border border-cyan-400/20 p-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  value={newFirst}
+                  onChange={(e) => setNewFirst(e.target.value)}
+                  placeholder="First name"
+                  className={field}
+                />
+                <input
+                  value={newLast}
+                  onChange={(e) => setNewLast(e.target.value)}
+                  placeholder="Last name"
+                  className={field}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  value={newBirth}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setNewBirth(e.target.value)}
+                  className={field}
+                />
+                <select
+                  value={newSex}
+                  onChange={(e) => setNewSex(e.target.value as 'male' | 'female')}
+                  className={field}
+                >
+                  <option value="male">♂ Male</option>
+                  <option value="female">♀ Female</option>
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void addPerson()}
+                  disabled={savingPerson}
+                  className="hud-mono flex flex-1 items-center justify-center gap-1 rounded-sm border border-emerald-400/50 bg-emerald-400/10 px-2 py-1 text-[10px] tracking-wider text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-40"
+                >
+                  {savingPerson && <Loader2 className="h-3 w-3 animate-spin" />} ADD
+                </button>
+                <button
+                  onClick={() => setAddingPerson(false)}
+                  className="hud-mono rounded-sm border border-cyan-400/25 px-2 py-1 text-[10px] tracking-wider text-cyan-200/70 transition hover:bg-cyan-400/10"
+                >
+                  CANCEL
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingPerson(true)}
+              className="hud-mono flex items-center justify-center gap-1 rounded-sm border border-cyan-400/40 px-3 py-1.5 text-[10px] tracking-wider text-cyan-200 transition hover:bg-cyan-400/10"
+            >
+              <UserPlus className="h-3 w-3" /> ADD A PERSON
+            </button>
+          )}
+
+          {peopleNotice && (
+            <p
+              className={`hud-mono text-[11px] tracking-wider ${
+                peopleNotice.startsWith('✓') ? 'text-emerald-300' : 'text-amber-300'
+              }`}
+            >
+              {peopleNotice}
+            </p>
+          )}
         </div>
 
         {/* --------------------------- credentials -------------------------- */}

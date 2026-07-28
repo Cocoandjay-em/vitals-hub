@@ -20,6 +20,7 @@ import { ManualEntryForm } from '@/components/ManualEntryForm'
 import { PanelAnalysis } from '@/components/PanelAnalysis'
 import { SettingsModal } from '@/components/SettingsModal'
 import { AccountModal } from '@/components/AccountModal'
+import { SubjectSwitcher } from '@/components/SubjectSwitcher'
 import { VitalCard, type VitalSeries } from '@/components/VitalCard'
 import { TrendChart, type TrendPoint } from '@/components/TrendChart'
 
@@ -45,6 +46,9 @@ export default function Home() {
   const [profile, setProfile] = useState<api.Profile | null>(null)
   const [showAccount, setShowAccount] = useState(false)
   const [username, setUsername] = useState('')
+  const [subjects, setSubjects] = useState<api.Subject[]>([])
+  const [activeSubjectId, setActiveSubjectId] = useState('')
+  const [switchingSubject, setSwitchingSubject] = useState(false)
   const importRef = useRef<HTMLInputElement>(null)
   const ahRef = useRef<HTMLInputElement>(null)
   const reportRef = useRef<HTMLInputElement>(null)
@@ -66,9 +70,21 @@ export default function Home() {
     }
   }, [])
 
+  const refreshSubjects = useCallback(async () => {
+    try {
+      const { subjects: list, activeId } = await api.getSubjects()
+      setSubjects(list)
+      setActiveSubjectId(activeId)
+    } catch {
+      /* single-person installs still work if this fails */
+    }
+  }, [])
+
+  /** Point the whole dashboard at another person. */
   useEffect(() => {
     void refreshHistory()
     void refreshReports()
+    void refreshSubjects()
     api.getConfig().then((cfg) => setAiEnabled(cfg.hasKey)).catch(() => undefined)
     api.getProfile().then((p) => { setProfile(p); setBodySex(p.sex) }).catch(() => undefined)
     api.getAuthStatus().then((s) => setUsername(s.username ?? '')).catch(() => undefined)
@@ -79,12 +95,42 @@ export default function Home() {
       setNotice('Old browser-only data wiped — re-upload your reports')
       window.setTimeout(() => setNotice(''), 6000)
     }
-  }, [refreshHistory, refreshReports])
+  }, [refreshHistory, refreshReports, refreshSubjects])
 
   const flashNotice = useCallback((msg: string) => {
     setNotice(msg)
     window.setTimeout(() => setNotice(''), 5000)
   }, [])
+
+  /** Point the whole dashboard at another person. */
+  const handleSwitchSubject = useCallback(
+    async (id: string) => {
+      setSwitchingSubject(true)
+      try {
+        await api.activateSubject(id)
+        setActiveSubjectId(id)
+        // everything on screen belongs to the previous person — reload it all
+        setSelectedMarker(null)
+        setViewDate(null)
+        await Promise.all([refreshHistory(), refreshReports()])
+        const p = await api.getProfile()
+        setProfile(p)
+        setBodySex(p.sex)
+      } catch (err) {
+        flashNotice(`⚠ Could not switch: ${err instanceof Error ? err.message : String(err)}`)
+      } finally {
+        setSwitchingSubject(false)
+      }
+    },
+    [refreshHistory, refreshReports, flashNotice],
+  )
+
+  /** After someone is added or removed, reload the roster and the active view. */
+  const handlePeopleChanged = useCallback(async () => {
+    await refreshSubjects()
+    await Promise.all([refreshHistory(), refreshReports()])
+    api.getProfile().then((p) => { setProfile(p); setBodySex(p.sex) }).catch(() => undefined)
+  }, [refreshSubjects, refreshHistory, refreshReports])
 
   /**
    * "Current state": the newest value of EVERY marker, merged across records.
@@ -489,6 +535,17 @@ export default function Home() {
       <div className="relative z-10 shrink-0 px-3 pt-3 sm:px-5 sm:pt-4">
         <div className="mx-auto w-full max-w-[1700px]">
           <Header latest={latestMerged} profile={profile} />
+          {subjects.length > 1 && (
+            <div className="mt-2 flex justify-end">
+              <SubjectSwitcher
+                subjects={subjects}
+                activeId={activeSubjectId}
+                onSwitch={handleSwitchSubject}
+                onManage={() => setShowAccount(true)}
+                busy={switchingSubject}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -788,7 +845,12 @@ export default function Home() {
         onProfileChange={(p) => {
           setProfile(p)
           setBodySex(p.sex)
+          void refreshSubjects() // the name in the switcher follows the profile
         }}
+        subjects={subjects}
+        activeSubjectId={activeSubjectId}
+        onSwitchSubject={handleSwitchSubject}
+        onPeopleChanged={handlePeopleChanged}
       />
     </div>
   )

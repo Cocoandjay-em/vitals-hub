@@ -74,7 +74,100 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS subjects (
+  id TEXT PRIMARY KEY,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
+  birth_date TEXT NOT NULL DEFAULT '',
+  sex TEXT NOT NULL DEFAULT 'male',
+  created_at TEXT NOT NULL
+);
 `)
+
+/* ------------------------------ migration ------------------------------ */
+
+function columnNames(table: string): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
+  )
+}
+
+/**
+ * One login can track several people — you, a partner, a child. Health data
+ * therefore hangs off a *subject*, not off the account.
+ *
+ * The original schema was single-tenant: tests, biomarkers and reports had no
+ * owner at all, and `tests.date` was globally UNIQUE, so two people could not
+ * both have a test on the same day. This gives every existing row to a first
+ * subject seeded from the stored profile, and rebuilds `tests` so uniqueness
+ * is per subject. Guarded by the presence of tests.subject_id, so it runs once.
+ */
+function migrateToSubjects(): void {
+  if (columnNames('tests').has('subject_id')) return
+
+  const now = new Date().toISOString()
+  const subjectId = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  const setting = (k: string) =>
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)
+      ?.value ?? ''
+
+  db.prepare(
+    `INSERT INTO subjects (id, first_name, last_name, birth_date, sex, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    subjectId,
+    setting('profile_first_name'),
+    setting('profile_last_name'),
+    setting('profile_birth_date'),
+    setting('profile_sex') === 'female' ? 'female' : 'male',
+    now,
+  )
+
+  if (!columnNames('reports').has('subject_id')) {
+    db.exec('ALTER TABLE reports ADD COLUMN subject_id TEXT')
+    db.prepare('UPDATE reports SET subject_id = ?').run(subjectId)
+  }
+  if (!columnNames('sessions').has('active_subject_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN active_subject_id TEXT')
+  }
+
+  // `tests` needs a real rebuild: SQLite cannot drop the UNIQUE(date).
+  // foreign_keys OFF stops the DROP cascading into biomarkers, and
+  // legacy_alter_table stops the RENAME repointing biomarkers.test_id.
+  db.pragma('foreign_keys = OFF')
+  db.pragma('legacy_alter_table = ON')
+  db.transaction(() => {
+    db.exec(`
+      ALTER TABLE tests RENAME TO tests_legacy;
+      CREATE TABLE tests (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+        date TEXT NOT NULL,
+        sources TEXT NOT NULL DEFAULT '[]',
+        demo INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(subject_id, date)
+      );
+    `)
+    db.prepare(
+      `INSERT INTO tests (id, subject_id, date, sources, demo, created_at)
+       SELECT id, ?, date, sources, demo, created_at FROM tests_legacy`,
+    ).run(subjectId)
+    db.exec('DROP TABLE tests_legacy')
+  })()
+  db.pragma('legacy_alter_table = OFF')
+  db.pragma('foreign_keys = ON')
+
+  const orphans = db.pragma('foreign_key_check') as unknown[]
+  if (orphans.length > 0) {
+    console.error(`[db] WARNING: ${orphans.length} orphaned rows after migration`)
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS tests_subject_idx ON tests(subject_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS reports_subject_idx ON reports(subject_id)')
+  console.log('[db] migrated to the multi-subject schema')
+}
+
+migrateToSubjects()
 
 /* ------------------------------- types ------------------------------- */
 
@@ -155,14 +248,17 @@ function mapBiomarker(r: BiomarkerDbRow): BiomarkerRow {
   }
 }
 
-export function getHistory(): { tests: TestRow[]; biomarkers: BiomarkerRow[] } {
-  const tests = (db.prepare('SELECT * FROM tests ORDER BY date ASC').all() as TestDbRow[]).map(mapTest)
+export function getHistory(subjectId: string): { tests: TestRow[]; biomarkers: BiomarkerRow[] } {
+  const tests = (
+    db.prepare('SELECT * FROM tests WHERE subject_id = ? ORDER BY date ASC').all(subjectId) as TestDbRow[]
+  ).map(mapTest)
   const biomarkers = (
     db
       .prepare(
-        'SELECT b.* FROM biomarkers b JOIN tests t ON t.id = b.test_id ORDER BY t.date ASC, b.name ASC',
+        `SELECT b.* FROM biomarkers b JOIN tests t ON t.id = b.test_id
+         WHERE t.subject_id = ? ORDER BY t.date ASC, b.name ASC`,
       )
-      .all() as BiomarkerDbRow[]
+      .all(subjectId) as BiomarkerDbRow[]
   ).map(mapBiomarker)
   return { tests, biomarkers }
 }
@@ -173,17 +269,24 @@ function uid(): string {
 
 /** Create or merge a test record by date; same-name biomarkers are overwritten. */
 export function upsertTest(input: {
+  subjectId: string
   date: string
   source: string
   demo?: boolean
   biomarkers: BiomarkerInput[]
 }): { test: TestRow; biomarkers: BiomarkerRow[] } {
   const tx = db.transaction(() => {
-    let row = db.prepare('SELECT * FROM tests WHERE date = ?').get(input.date) as TestDbRow | undefined
+    // a date identifies a test within one person, not across everybody
+    let row = db
+      .prepare('SELECT * FROM tests WHERE subject_id = ? AND date = ?')
+      .get(input.subjectId, input.date) as TestDbRow | undefined
     if (!row) {
       const id = uid()
-      db.prepare('INSERT INTO tests (id, date, sources, demo, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      db.prepare(
+        'INSERT INTO tests (id, subject_id, date, sources, demo, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(
         id,
+        input.subjectId,
         input.date,
         JSON.stringify([input.source]),
         input.demo ? 1 : 0,
@@ -257,8 +360,14 @@ export function deleteTest(id: string): boolean {
   return info.changes > 0
 }
 
-export function clearHistory(): void {
-  db.exec('DELETE FROM biomarkers; DELETE FROM tests;')
+/** Wipe one person's history, leaving everyone else's untouched. */
+export function clearHistory(subjectId: string): void {
+  db.transaction(() => {
+    db.prepare(
+      'DELETE FROM biomarkers WHERE test_id IN (SELECT id FROM tests WHERE subject_id = ?)',
+    ).run(subjectId)
+    db.prepare('DELETE FROM tests WHERE subject_id = ?').run(subjectId)
+  })()
 }
 
 /* --------------------------- clinical reports --------------------------- */
@@ -325,6 +434,7 @@ function mapReport(r: ReportDbRow): ReportRow {
 }
 
 export interface ReportInput {
+  subjectId: string
   date: string
   title: string
   specialty: string
@@ -340,22 +450,25 @@ export interface ReportInput {
   mime: string | null
 }
 
-export function getReports(): ReportRow[] {
+export function getReports(subjectId: string): ReportRow[] {
   return (
-    db.prepare('SELECT * FROM reports ORDER BY date DESC, created_at DESC').all() as ReportDbRow[]
+    db
+      .prepare('SELECT * FROM reports WHERE subject_id = ? ORDER BY date DESC, created_at DESC')
+      .all(subjectId) as ReportDbRow[]
   ).map(mapReport)
 }
 
 export function insertReport(id: string, input: ReportInput): ReportRow {
   db.prepare(
     `INSERT INTO reports
-       (id, date, title, specialty, region, stage, stage_source, stage_rationale,
+       (id, subject_id, date, title, specialty, region, stage, stage_source, stage_rationale,
         summary, findings, follow_up, file_name, file_path, mime, created_at)
      VALUES
-       (@id, @date, @title, @specialty, @region, @stage, @stageSource, @stageRationale,
+       (@id, @subjectId, @date, @title, @specialty, @region, @stage, @stageSource, @stageRationale,
         @summary, @findings, @followUp, @fileName, @filePath, @mime, @createdAt)`,
   ).run({
     id,
+    subjectId: input.subjectId,
     date: input.date,
     title: input.title,
     specialty: input.specialty,
@@ -494,6 +607,122 @@ export function deleteSessionsForUser(userId: string): void {
 
 export function purgeExpiredSessions(): void {
   db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString())
+}
+
+/* ------------------------------ subjects ------------------------------ */
+
+export interface SubjectRow {
+  id: string
+  firstName: string
+  lastName: string
+  /** ISO yyyy-mm-dd, empty when not set */
+  birthDate: string
+  sex: string
+  createdAt: string
+}
+
+interface SubjectDbRow {
+  id: string
+  first_name: string
+  last_name: string
+  birth_date: string
+  sex: string
+  created_at: string
+}
+
+function mapSubject(r: SubjectDbRow): SubjectRow {
+  return {
+    id: r.id,
+    firstName: r.first_name,
+    lastName: r.last_name,
+    birthDate: r.birth_date,
+    sex: r.sex,
+    createdAt: r.created_at,
+  }
+}
+
+export function listSubjects(): SubjectRow[] {
+  return (
+    db.prepare('SELECT * FROM subjects ORDER BY created_at ASC').all() as SubjectDbRow[]
+  ).map(mapSubject)
+}
+
+export function getSubject(id: string): SubjectRow | null {
+  const row = db.prepare('SELECT * FROM subjects WHERE id = ?').get(id) as SubjectDbRow | undefined
+  return row ? mapSubject(row) : null
+}
+
+export interface SubjectInput {
+  firstName?: string
+  lastName?: string
+  birthDate?: string
+  sex?: string
+}
+
+export function createSubject(input: SubjectInput): SubjectRow {
+  const id = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  db.prepare(
+    `INSERT INTO subjects (id, first_name, last_name, birth_date, sex, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.firstName ?? '',
+    input.lastName ?? '',
+    input.birthDate ?? '',
+    input.sex === 'female' ? 'female' : 'male',
+    new Date().toISOString(),
+  )
+  return getSubject(id) as SubjectRow
+}
+
+export function updateSubject(id: string, input: SubjectInput): SubjectRow | null {
+  if (!getSubject(id)) return null
+  const columns: Record<string, string> = {
+    firstName: 'first_name',
+    lastName: 'last_name',
+    birthDate: 'birth_date',
+    sex: 'sex',
+  }
+  for (const [key, column] of Object.entries(columns)) {
+    const value = input[key as keyof SubjectInput]
+    if (value !== undefined) db.prepare(`UPDATE subjects SET ${column} = ? WHERE id = ?`).run(value, id)
+  }
+  return getSubject(id)
+}
+
+/**
+ * Remove a person and everything recorded about them. Returns the stored
+ * report files so the caller can unlink them; refuses to delete the last
+ * subject, since the app always needs someone to show.
+ */
+export function deleteSubject(id: string): { deleted: boolean; filePaths: string[] } {
+  if (listSubjects().length <= 1) return { deleted: false, filePaths: [] }
+  const files = (
+    db.prepare('SELECT file_path FROM reports WHERE subject_id = ? AND file_path IS NOT NULL').all(id) as {
+      file_path: string
+    }[]
+  ).map((r) => r.file_path)
+  db.transaction(() => {
+    clearHistory(id)
+    db.prepare('DELETE FROM reports WHERE subject_id = ?').run(id)
+    db.prepare('UPDATE sessions SET active_subject_id = NULL WHERE active_subject_id = ?').run(id)
+    db.prepare('DELETE FROM subjects WHERE id = ?').run(id)
+  })()
+  return { deleted: true, filePaths: files }
+}
+
+/** The subject a session is currently looking at, falling back to the first. */
+export function getActiveSubjectId(tokenHash: string): string {
+  const row = db.prepare('SELECT active_subject_id FROM sessions WHERE token_hash = ?').get(tokenHash) as
+    | { active_subject_id: string | null }
+    | undefined
+  if (row?.active_subject_id && getSubject(row.active_subject_id)) return row.active_subject_id
+  const first = listSubjects()[0]
+  return first ? first.id : createSubject({}).id
+}
+
+export function setActiveSubjectId(tokenHash: string, subjectId: string): void {
+  db.prepare('UPDATE sessions SET active_subject_id = ? WHERE token_hash = ?').run(subjectId, tokenHash)
 }
 
 /* ------------------------------ settings ------------------------------ */

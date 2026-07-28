@@ -19,17 +19,20 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import express from 'express';
 import {
   clearHistory,
+  createSubject,
   deleteMarker,
   DATA_DIR,
   deleteReport,
+  deleteSubject,
   deleteTest,
   getHistory,
   getReportFile,
   getReports,
-  getSetting,
+  getSubject,
   insertReport,
-  setSetting,
+  listSubjects,
   updateReport,
+  updateSubject,
   upsertTest,
 } from './db.js';
 import {
@@ -47,6 +50,7 @@ import {
   changePassword,
   clearFailures,
   clearSession,
+  currentSubjectId,
   currentUser,
   isConfigured,
   issueSession,
@@ -56,6 +60,7 @@ import {
   requireAuth,
   setupFirstUser,
   startSessionCleanup,
+  switchSubject,
   usernameProblem,
 } from './auth.js';
 
@@ -97,7 +102,7 @@ app.post('/api/auth/setup', (req, res) => {
   }
   try {
     const user = setupFirstUser(username, password);
-    writeProfile((req.body ?? {}) as Record<string, unknown>);
+    writeProfile(currentSubjectId(req), (req.body ?? {}) as Record<string, unknown>);
     issueSession(req, res, user.id);
     res.json({ username: user.username });
   } catch (err) {
@@ -165,8 +170,8 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, ts: Date.now() });
 });
 
-app.get('/api/history', (_req, res) => {
-  res.json(getHistory());
+app.get('/api/history', (req, res) => {
+  res.json(getHistory(currentSubjectId(req)));
 });
 
 app.post('/api/tests', (req, res) => {
@@ -180,6 +185,7 @@ app.post('/api/tests', (req, res) => {
     return;
   }
   const input = {
+    subjectId: currentSubjectId(req),
     date: b.date as string,
     source: String(
       b.source ??
@@ -222,8 +228,8 @@ app.delete('/api/tests/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/history', (_req, res) => {
-  clearHistory();
+app.delete('/api/history', (req, res) => {
+  clearHistory(currentSubjectId(req));
   res.json({ ok: true });
 });
 
@@ -240,12 +246,14 @@ interface Profile {
   sex: ProfileSex;
 }
 
-function readProfile(): Profile {
+/** The profile of whichever person the session is currently viewing. */
+function readProfile(req: express.Request): Profile {
+  const s = getSubject(currentSubjectId(req));
   return {
-    firstName: getSetting('profile_first_name') ?? '',
-    lastName: getSetting('profile_last_name') ?? '',
-    birthDate: getSetting('profile_birth_date') ?? '',
-    sex: getSetting('profile_sex') === 'female' ? 'female' : PROFILE_DEFAULT,
+    firstName: s?.firstName ?? '',
+    lastName: s?.lastName ?? '',
+    birthDate: s?.birthDate ?? '',
+    sex: s?.sex === 'female' ? 'female' : PROFILE_DEFAULT,
   };
 }
 
@@ -270,16 +278,18 @@ function profileProblem(b: Record<string, unknown>): string | null {
   return null;
 }
 
-/** Persist only the fields present in the payload. */
-function writeProfile(b: Record<string, unknown>): void {
-  if (b.firstName !== undefined) setSetting('profile_first_name', String(b.firstName).trim());
-  if (b.lastName !== undefined) setSetting('profile_last_name', String(b.lastName).trim());
-  if (b.birthDate !== undefined) setSetting('profile_birth_date', String(b.birthDate));
-  if (b.sex !== undefined) setSetting('profile_sex', String(b.sex));
+/** Persist only the fields present in the payload, onto one subject. */
+function writeProfile(subjectId: string, b: Record<string, unknown>): void {
+  updateSubject(subjectId, {
+    firstName: b.firstName === undefined ? undefined : String(b.firstName).trim(),
+    lastName: b.lastName === undefined ? undefined : String(b.lastName).trim(),
+    birthDate: b.birthDate === undefined ? undefined : String(b.birthDate),
+    sex: b.sex === undefined ? undefined : String(b.sex),
+  });
 }
 
-app.get('/api/profile', (_req, res) => {
-  res.json(readProfile());
+app.get('/api/profile', (req, res) => {
+  res.json(readProfile(req));
 });
 
 app.put('/api/profile', (req, res) => {
@@ -289,8 +299,80 @@ app.put('/api/profile', (req, res) => {
     res.status(400).json({ error: problem });
     return;
   }
-  writeProfile(b);
-  res.json(readProfile());
+  writeProfile(currentSubjectId(req), b);
+  res.json(readProfile(req));
+});
+
+// ----- subjects: the people tracked under this login -----
+
+function subjectPayload(s: { id: string; firstName: string; lastName: string; birthDate: string; sex: string }) {
+  return {
+    id: s.id,
+    firstName: s.firstName,
+    lastName: s.lastName,
+    birthDate: s.birthDate,
+    sex: s.sex === 'female' ? 'female' : 'male',
+  };
+}
+
+app.get('/api/subjects', (req, res) => {
+  res.json({ subjects: listSubjects().map(subjectPayload), activeId: currentSubjectId(req) });
+});
+
+app.post('/api/subjects', (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const problem = profileProblem(b);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  const created = createSubject({
+    firstName: String(b.firstName ?? '').trim(),
+    lastName: String(b.lastName ?? '').trim(),
+    birthDate: String(b.birthDate ?? ''),
+    sex: String(b.sex ?? 'male'),
+  });
+  res.json(subjectPayload(created));
+});
+
+app.patch('/api/subjects/:id', (req, res) => {
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const problem = profileProblem(b);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  const updated = updateSubject(req.params.id, {
+    firstName: b.firstName === undefined ? undefined : String(b.firstName).trim(),
+    lastName: b.lastName === undefined ? undefined : String(b.lastName).trim(),
+    birthDate: b.birthDate === undefined ? undefined : String(b.birthDate),
+    sex: b.sex === undefined ? undefined : String(b.sex),
+  });
+  if (!updated) {
+    res.status(404).json({ error: 'no such person' });
+    return;
+  }
+  res.json(subjectPayload(updated));
+});
+
+/** Switch which person the dashboard is showing. */
+app.post('/api/subjects/:id/activate', (req, res) => {
+  if (!getSubject(req.params.id)) {
+    res.status(404).json({ error: 'no such person' });
+    return;
+  }
+  switchSubject(req, req.params.id);
+  res.json({ activeId: req.params.id });
+});
+
+app.delete('/api/subjects/:id', (req, res) => {
+  const { deleted, filePaths } = deleteSubject(req.params.id);
+  if (!deleted) {
+    res.status(400).json({ error: 'cannot remove the last person on the account' });
+    return;
+  }
+  for (const p of filePaths) rmSync(p, { force: true });
+  res.json({ ok: true, activeId: currentSubjectId(req) });
 });
 
 // ----- AI settings -----
@@ -507,8 +589,9 @@ app.post('/api/import/apple-health', (req, res) => {
     byDate.set(date, list);
   }
   let imported = 0;
+  const subjectId = currentSubjectId(req);
   for (const [date, biomarkers] of byDate) {
-    upsertTest({ date, source: 'Apple Health', biomarkers });
+    upsertTest({ subjectId, date, source: 'Apple Health', biomarkers });
     imported += biomarkers.length;
   }
   res.json({ imported, days: byDate.size, skipped });
@@ -533,8 +616,8 @@ function reportId(): string {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-app.get('/api/reports', (_req, res) => {
-  res.json({ reports: getReports() });
+app.get('/api/reports', (req, res) => {
+  res.json({ reports: getReports(currentSubjectId(req)) });
 });
 
 /** Vision pass over a clinical report — proposes a staging, saves nothing. */
@@ -600,6 +683,7 @@ app.post('/api/reports', (req, res) => {
   }
 
   const report = insertReport(id, {
+    subjectId: currentSubjectId(req),
     date: b.date as string,
     title: String(b.title ?? 'Clinical report').slice(0, 120),
     specialty: String(b.specialty ?? '').slice(0, 60),
