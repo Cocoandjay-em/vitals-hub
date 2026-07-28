@@ -108,6 +108,19 @@ temperature in one tap. **APPLE HEALTH** imports an iPhone Health export
 shows your age), the body model, and the password change form. **AI KEY** holds
 the AI endpoint settings. Sign out from the badge in the bottom-right corner.
 
+**Track more than one person.** One login can hold a partner or a child
+alongside you. Add them under **ACCOUNT → People**, then use the switcher beside
+the header to change who the dashboard is showing — tests, reports, vitals and
+the body model all follow that person. The switcher only appears once a second
+person exists, so a single-person install looks exactly as it did before.
+
+Everyone on the account is visible to anyone who can sign in: this separates
+*people*, not *privacy*. If two adults each want data the other cannot see, run
+two installations. The choice of person lives on the session, so a phone and a
+laptop can show different people at the same time. Removing a person
+permanently deletes their tests, markers and stored documents, and the last
+person cannot be removed.
+
 ## Run it as a single process
 
 ```bash
